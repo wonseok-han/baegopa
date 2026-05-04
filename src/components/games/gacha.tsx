@@ -63,7 +63,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
 
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(mx, my, len, 4, {
-          isStatic: true, angle, restitution: 0.9, label: "boundary",
+          isStatic: true, angle, restitution: 0.3, label: "boundary",
         })
       );
     }
@@ -77,7 +77,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
       const x = CENTER + Math.cos(angle) * dist;
       const y = CENTER + Math.sin(angle) * dist;
       const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.8, friction: 0.01, density: 0.001, label: `ball-${i}`,
+        restitution: 0.3, friction: 0.05, density: 0.001, label: `ball-${i}`,
       });
       balls.push({ name: selected[i].name, color: COLORS[i % COLORS.length], body });
       Matter.Composite.add(engine.world, body);
@@ -92,9 +92,9 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     mixAngleRef.current = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
       if (winnerRef.current) return;
-      mixAngleRef.current += 0.12;
-      engine.gravity.x = Math.cos(mixAngleRef.current) * 0.004;
-      engine.gravity.y = Math.sin(mixAngleRef.current) * 0.004;
+      mixAngleRef.current += 0.08;
+      engine.gravity.x = Math.cos(mixAngleRef.current) * 0.002;
+      engine.gravity.y = Math.sin(mixAngleRef.current) * 0.002;
       engine.gravity.scale = 1;
     });
 
