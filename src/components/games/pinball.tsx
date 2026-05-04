@@ -6,7 +6,7 @@ import type { GameProps } from "@/types";
 
 const WIDTH = 320;
 const CANVAS_HEIGHT = 520;
-const BALL_RADIUS = 7;
+const BALL_RADIUS = 11;
 const COLORS = [
   "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
   "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f43f5e",
@@ -66,13 +66,13 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
     // Section 1: Dense peg field
     for (let row = 0; row < 8; row++) {
-      const y = courseStartY + row * 35;
-      const cols = row % 2 === 0 ? 9 : 8;
+      const y = courseStartY + row * 45;
+      const cols = row % 2 === 0 ? 7 : 6;
       const spacing = WIDTH / (cols + 1);
       const offsetX = row % 2 === 0 ? spacing : spacing + spacing / 2;
       for (let col = 0; col < cols; col++) {
         Matter.Composite.add(engine.world,
-          Matter.Bodies.circle(offsetX + col * spacing, y, 4, {
+          Matter.Bodies.circle(offsetX + col * spacing, y, 5, {
             isStatic: true, restitution: 1.0, label: "peg",
           })
         );
@@ -104,31 +104,33 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       }
     }
 
-    // Section 3: Funnels with narrow gaps (elimination zones)
+    // Section 3: Angled funnels (V-shape toward gap so balls slide through)
     const sec3Start = courseStartY + sectionHeight * 2;
     for (let i = 0; i < 3; i++) {
       const y = sec3Start + i * 80 + 40;
       const gapX = WIDTH * (0.3 + Math.random() * 0.4);
-      const gapWidth = 35;
+      const gapWidth = 45;
 
-      // Left part of funnel
-      if (gapX - gapWidth / 2 > 20) {
+      // Left wall angled down toward gap
+      const leftLen = gapX - gapWidth / 2;
+      if (leftLen > 30) {
         Matter.Composite.add(engine.world,
           Matter.Bodies.rectangle(
-            (gapX - gapWidth / 2) / 2, y,
-            gapX - gapWidth / 2, 6,
-            { isStatic: true, label: "funnel", chamfer: { radius: 3 } }
+            leftLen / 2, y - 10,
+            leftLen, 6,
+            { isStatic: true, label: "funnel", chamfer: { radius: 3 }, angle: 0.25 }
           )
         );
       }
-      // Right part of funnel
+      // Right wall angled down toward gap
       const rightStart = gapX + gapWidth / 2;
-      if (WIDTH - rightStart > 20) {
+      const rightLen = WIDTH - rightStart;
+      if (rightLen > 30) {
         Matter.Composite.add(engine.world,
           Matter.Bodies.rectangle(
-            rightStart + (WIDTH - rightStart) / 2, y,
-            WIDTH - rightStart, 6,
-            { isStatic: true, label: "funnel", chamfer: { radius: 3 } }
+            rightStart + rightLen / 2, y - 10,
+            rightLen, 6,
+            { isStatic: true, label: "funnel", chamfer: { radius: 3 }, angle: -0.25 }
           )
         );
       }
@@ -161,26 +163,29 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       }
     }
 
-    // Section 5: Final narrow funnel - tight gap at end
+    // Section 5: Final angled funnels - steeper V-shapes with narrowing gaps
     const sec5Start = courseStartY + sectionHeight * 4;
     for (let i = 0; i < 4; i++) {
-      const y = sec5Start + i * 50 + 25;
-      const gapWidth = 40 - i * 5; // Gets narrower
-      const gapX = WIDTH / 2 + (Math.random() - 0.5) * 60;
+      const y = sec5Start + i * 55 + 25;
+      const gapWidth = 50 - i * 6;
+      const gapX = WIDTH / 2 + (Math.random() - 0.5) * 50;
+      const angle = 0.3 + i * 0.05; // Gets steeper
 
+      const leftLen = Math.max(20, gapX - gapWidth / 2);
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(
-          (gapX - gapWidth / 2) / 2, y,
-          Math.max(10, gapX - gapWidth / 2), 6,
-          { isStatic: true, label: "funnel", chamfer: { radius: 3 } }
+          leftLen / 2, y - 12,
+          leftLen, 6,
+          { isStatic: true, label: "funnel", chamfer: { radius: 3 }, angle }
         )
       );
       const rightStart = gapX + gapWidth / 2;
+      const rightLen = Math.max(20, WIDTH - rightStart);
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(
-          rightStart + (WIDTH - rightStart) / 2, y,
-          Math.max(10, WIDTH - rightStart), 6,
-          { isStatic: true, label: "funnel", chamfer: { radius: 3 } }
+          rightStart + rightLen / 2, y - 12,
+          rightLen, 6,
+          { isStatic: true, label: "funnel", chamfer: { radius: 3 }, angle: -angle }
         )
       );
     }
@@ -195,12 +200,12 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
     // Create balls
     const balls: BallData[] = [];
-    const cols = Math.min(ballCount, 10);
+    const cols = Math.min(ballCount, 8);
     for (let i = 0; i < ballCount; i++) {
       const col = i % cols;
       const row = Math.floor(i / cols);
-      const x = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 8;
-      const y = 15 + row * (BALL_RADIUS * 2.8);
+      const x = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 6;
+      const y = 15 + row * (BALL_RADIUS * 2.5);
       const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
         restitution: 0.8,
         friction: 0.01,
@@ -303,7 +308,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
         if (body.label === "peg") {
           ctx.beginPath();
-          ctx.arc(body.position.x, screenY, 4, 0, Math.PI * 2);
+          ctx.arc(body.position.x, screenY, 5, 0, Math.PI * 2);
           ctx.fillStyle = "#374151";
           ctx.fill();
         }
@@ -319,12 +324,15 @@ export function PinballGame({ candidates, onResult }: GameProps) {
           ctx.restore();
         }
         if (body.label === "funnel") {
+          ctx.save();
+          ctx.translate(body.position.x, screenY);
+          ctx.rotate(body.angle);
           const w = body.bounds.max.x - body.bounds.min.x;
-          const h = body.bounds.max.y - body.bounds.min.y;
           ctx.fillStyle = "#06b6d4";
           ctx.beginPath();
-          ctx.roundRect(body.bounds.min.x, screenY - h / 2, w, h, 3);
+          ctx.roundRect(-w / 2, -3, w, 6, 3);
           ctx.fill();
+          ctx.restore();
         }
       }
 
@@ -341,15 +349,24 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         ctx.arc(x, screenY, BALL_RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = ball.color;
         ctx.fill();
-        ctx.strokeStyle = isWin ? "#fbbf24" : "rgba(255,255,255,0.2)";
-        ctx.lineWidth = isWin ? 2.5 : 0.8;
+        ctx.strokeStyle = isWin ? "#fbbf24" : "rgba(255,255,255,0.3)";
+        ctx.lineWidth = isWin ? 2.5 : 1;
         ctx.stroke();
 
         // Shine
         ctx.beginPath();
-        ctx.arc(x - 2, screenY - 2, 1.5, 0, Math.PI * 2);
+        ctx.arc(x - 3, screenY - 3, 2, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(255,255,255,0.4)";
         ctx.fill();
+
+        // Restaurant name on ball
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.font = "bold 7px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const label = ball.name.length > 4 ? ball.name.slice(0, 4) : ball.name;
+        ctx.fillText(label, x, screenY);
+        ctx.textBaseline = "alphabetic";
 
         if (isWin) {
           ctx.beginPath();
