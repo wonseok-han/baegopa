@@ -11,6 +11,7 @@ import {
 import type { Restaurant } from "@/types";
 
 const RADIUS_OPTIONS = [
+  { value: 100, label: "100m" },
   { value: 300, label: "300m" },
   { value: 500, label: "500m" },
   { value: 1000, label: "1km" },
@@ -59,7 +60,7 @@ export default function Home() {
     if (!mapRef.current) {
       const map = new kakao.maps.Map(mapContainerRef.current, {
         center: position,
-        level: radius <= 300 ? 4 : radius <= 500 ? 5 : 6,
+        level: radius <= 100 ? 3 : radius <= 300 ? 4 : radius <= 500 ? 5 : 6,
       });
 
       new kakao.maps.Marker({
@@ -87,7 +88,7 @@ export default function Home() {
     circle.setMap(mapRef.current);
     circleRef.current = circle;
 
-    const level = radius <= 300 ? 4 : radius <= 500 ? 5 : 6;
+    const level = radius <= 100 ? 3 : radius <= 300 ? 4 : radius <= 500 ? 5 : 6;
     mapRef.current.setLevel(level);
     mapRef.current.setCenter(position);
   }, [mapReady, coordinates, radius]);
