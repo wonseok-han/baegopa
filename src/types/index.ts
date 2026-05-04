@@ -3,10 +3,9 @@ export interface Restaurant {
   name: string;
   category: string;
   distance: number;
-  rating?: number;
   address: string;
   location: { lat: number; lng: number };
-  photoUrl?: string;
+  placeUrl?: string;
 }
 
 export interface GameProps {

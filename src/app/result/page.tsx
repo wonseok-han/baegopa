@@ -11,16 +11,12 @@ function ResultContent() {
   const category = searchParams.get("category");
   const distance = searchParams.get("distance");
   const address = searchParams.get("address");
-  const rating = searchParams.get("rating");
-  const lat = searchParams.get("lat");
-  const lng = searchParams.get("lng");
+  const placeUrl = searchParams.get("placeUrl");
 
   if (!name) {
     router.replace("/");
     return null;
   }
-
-  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
@@ -39,12 +35,6 @@ function ResultContent() {
             <span className="text-zinc-500">거리</span>
             <span className="font-medium">{distance}m</span>
           </div>
-          {rating && (
-            <div className="flex justify-between">
-              <span className="text-zinc-500">평점</span>
-              <span className="font-medium">⭐ {rating}</span>
-            </div>
-          )}
           <div className="flex justify-between">
             <span className="text-zinc-500">주소</span>
             <span className="text-right text-sm font-medium">{address}</span>
@@ -53,14 +43,16 @@ function ResultContent() {
       </div>
 
       <div className="flex flex-col gap-3">
-        <a
-          href={mapsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="rounded-full bg-blue-500 px-8 py-3 text-center font-semibold text-white transition-transform hover:scale-105 hover:bg-blue-600 active:scale-95"
-        >
-          📍 지도에서 보기
-        </a>
+        {placeUrl && (
+          <a
+            href={placeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-full bg-yellow-400 px-8 py-3 text-center font-semibold text-zinc-900 transition-transform hover:scale-105 hover:bg-yellow-500 active:scale-95"
+          >
+            📍 카카오맵에서 보기
+          </a>
+        )}
         <button
           onClick={() => router.back()}
           className="rounded-full bg-orange-500 px-8 py-3 font-semibold text-white transition-transform hover:scale-105 hover:bg-orange-600 active:scale-95"

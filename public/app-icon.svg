@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#FFF3E0"/>
+  <!-- Bowl -->
+  <path d="M96 272 C96 272 112 416 256 416 C400 416 416 272 416 272 Z" fill="#FF8C00"/>
+  <ellipse cx="256" cy="272" rx="160" ry="40" fill="#FFA500"/>
+  <!-- Rice -->
+  <ellipse cx="256" cy="260" rx="136" ry="52" fill="#FFFFFF"/>
+  <circle cx="208" cy="248" r="18" fill="#F5F5F5"/>
+  <circle cx="256" cy="236" r="18" fill="#F5F5F5"/>
+  <circle cx="304" cy="248" r="18" fill="#F5F5F5"/>
+  <!-- Steam -->
+  <path d="M192 180 Q208 148 192 116" stroke="#BDBDBD" stroke-width="12" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <path d="M256 164 Q272 132 256 100" stroke="#BDBDBD" stroke-width="12" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <path d="M320 180 Q336 148 320 116" stroke="#BDBDBD" stroke-width="12" fill="none" stroke-linecap="round" opacity="0.7"/>
+</svg>

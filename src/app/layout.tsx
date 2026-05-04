@@ -9,7 +9,10 @@ const geist = Geist({
 
 export const metadata: Metadata = {
   title: "배고파 — 뭐 먹지?",
-  description: "선택 장애를 위한 핀볼 음식점 룰렛",
+  description: "선택 장애를 위한 미니게임 음식점 선택기",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

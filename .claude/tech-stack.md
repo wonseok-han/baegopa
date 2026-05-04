@@ -6,7 +6,7 @@
 | **Styling** | Tailwind CSS 4 |
 | **Animation** | Framer Motion (전환/연출) + Canvas API (게임별) |
 | **Physics (선택)** | Matter.js (핀볼 등 물리 기반 게임 시) |
-| **Maps/Places** | Google Places API (또는 Kakao Maps API) |
+| **Maps/Places** | Kakao 로컬 REST API (카테고리 검색) |
 | **Geolocation** | Browser Geolocation API |
 | **Package Manager** | pnpm |
 | **Deploy** | Vercel |
@@ -16,11 +16,11 @@
 
 | 용도 | API | Note |
 |---|---|---|
-| 주변 음식점 검색 | Google Places API (Nearby Search) | API Key 필요, 서버 프록시 |
-| 지도 표시 (선택) | Google Maps JavaScript API | 클라이언트 |
+| 주변 음식점 검색 | Kakao 로컬 REST API (카테고리 검색) | REST API Key, 서버 프록시 |
+| 결과 상세 | 카카오맵 place_url 링크 | 클라이언트에서 외부 링크 |
 | 위치 정보 | Browser Geolocation API | 무료, 사용자 허가 필요 |
 
-> API 선택은 추후 확정. Google Places vs Kakao Maps 중 결정 필요.
+> Kakao 로컬 API: 30만 건/일 무료. 한국 음식점 데이터 우수. FD6(음식점), CE7(카페) 카테고리 코드 사용.
 
 ### 미니게임 후보 & 기술
 
@@ -41,7 +41,7 @@
   ├── Geolocation API → 사용자 위치 획득
   ├── Next.js Pages → UI (게임 선택 + 미니게임 + 결과)
   └── fetch → /api/places (Next.js API Route)
-                └── Google Places API (서버 프록시)
+                └── Kakao 로컬 REST API (서버 프록시)
 ```
 
-> API Key를 클라이언트에 노출하지 않기 위해 Next.js API Routes를 프록시로 사용.
+> REST API Key를 클라이언트에 노출하지 않기 위해 Next.js API Routes를 프록시로 사용.

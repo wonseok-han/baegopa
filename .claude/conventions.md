@@ -25,8 +25,8 @@
 
 | Prefix | Scope | Example |
 |---|---|---|
-| `NEXT_PUBLIC_` | 브라우저 노출 OK | `NEXT_PUBLIC_GOOGLE_MAPS_KEY` |
-| (no prefix) | 서버 전용 | `GOOGLE_PLACES_API_KEY` |
+| `NEXT_PUBLIC_` | 브라우저 노출 OK | `NEXT_PUBLIC_KAKAO_JS_KEY` (선택) |
+| (no prefix) | 서버 전용 | `KAKAO_REST_API_KEY` |
 
 ### 디렉토리 구조 (예정)
 
