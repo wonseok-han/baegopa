@@ -73,22 +73,23 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       for (let col = 0; col < cols; col++) {
         Matter.Composite.add(engine.world,
           Matter.Bodies.circle(offsetX + col * spacing, y, 4, {
-            isStatic: true, restitution: 0.7, label: "peg",
+            isStatic: true, restitution: 1.0, label: "peg",
           })
         );
       }
     }
 
-    // Section 2: Rotating bars that push balls sideways
+    // Section 2: Rotating bars (angled start so balls don't rest flat)
     const sec2Start = courseStartY + sectionHeight;
     for (let i = 0; i < 4; i++) {
       const y = sec2Start + i * 60 + 30;
       const x = i % 2 === 0 ? WIDTH * 0.3 : WIDTH * 0.7;
       const bar = Matter.Bodies.rectangle(x, y, 70, 6, {
         isStatic: true, label: "spinner", chamfer: { radius: 3 },
+        angle: Math.PI * 0.25 * (i % 2 === 0 ? 1 : -1),
       });
       Matter.Composite.add(engine.world, bar);
-      const speed = (i % 2 === 0 ? 1 : -1) * 0.04;
+      const speed = (i % 2 === 0 ? 1 : -1) * 0.05;
       Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(bar, speed));
     }
 
@@ -140,9 +141,10 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const x = WIDTH / 2 + (i % 2 === 0 ? -40 : 40);
       const bar = Matter.Bodies.rectangle(x, y, 80, 5, {
         isStatic: true, label: "spinner", chamfer: { radius: 2.5 },
+        angle: Math.PI * 0.3,
       });
       Matter.Composite.add(engine.world, bar);
-      const speed = (i % 2 === 0 ? 1 : -1) * 0.035;
+      const speed = (i % 2 === 0 ? 1 : -1) * 0.045;
       Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(bar, speed));
     }
 
@@ -186,9 +188,10 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     // Final rotating bar before exit
     const finalBar = Matter.Bodies.rectangle(WIDTH / 2, courseEndY - 20, 90, 5, {
       isStatic: true, label: "spinner", chamfer: { radius: 2.5 },
+      angle: Math.PI * 0.2,
     });
     Matter.Composite.add(engine.world, finalBar);
-    Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(finalBar, 0.03));
+    Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(finalBar, 0.04));
 
     // Create balls
     const balls: BallData[] = [];
@@ -199,8 +202,8 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const x = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 8;
       const y = 15 + row * (BALL_RADIUS * 2.8);
       const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.5,
-        friction: 0.03,
+        restitution: 0.8,
+        friction: 0.01,
         density: 0.001,
         label: `ball-${i}`,
       });
@@ -208,6 +211,23 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       Matter.Composite.add(engine.world, body);
     }
     ballsRef.current = balls;
+
+    // Anti-stuck: nudge balls that aren't moving
+    let tickCount = 0;
+    Matter.Events.on(engine, "beforeUpdate", () => {
+      tickCount++;
+      if (tickCount % 120 !== 0) return; // Check every ~2 seconds
+      for (const ball of balls) {
+        if (ball.eliminated) continue;
+        const speed = Math.sqrt(ball.body.velocity.x ** 2 + ball.body.velocity.y ** 2);
+        if (speed < 0.3) {
+          Matter.Body.applyForce(ball.body, ball.body.position, {
+            x: (Math.random() - 0.5) * 0.0005,
+            y: 0.0003,
+          });
+        }
+      }
+    });
 
     const runner = Matter.Runner.create();
     runnerRef.current = runner;
