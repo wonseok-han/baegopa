@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useNearbyPlaces } from "@/hooks/use-nearby-places";
 import { GAMES, getRandomGame } from "@/lib/game-registry";
+import { GameIcon, DiceIcon } from "@/components/ui/game-icons";
 import type { GameMeta, Restaurant } from "@/types";
 
 function PlayContent() {
@@ -40,20 +41,29 @@ function PlayContent() {
   if (loading) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-orange-500 border-t-transparent" />
-        <p className="text-zinc-500">주변 음식점 찾는 중...</p>
+        <div className="h-10 w-10 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+        <p className="text-muted">주변 음식점 찾는 중...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
-        <p className="text-lg">😢</p>
-        <p className="text-zinc-600 dark:text-zinc-400">{error}</p>
+      <div className="flex flex-1 flex-col items-center justify-center gap-5 p-8">
+        <div className="rounded-full bg-surface-dim p-4">
+          <svg viewBox="0 0 24 24" fill="none" className="h-8 w-8 text-muted">
+            <path
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+        <p className="text-center text-muted">{error}</p>
         <button
           onClick={() => router.back()}
-          className="rounded-full bg-zinc-200 px-6 py-2 text-sm dark:bg-zinc-700"
+          className="rounded-full bg-surface-dim px-6 py-2.5 text-sm font-medium transition-colors hover:bg-border"
         >
           돌아가기
         </button>
@@ -64,31 +74,45 @@ function PlayContent() {
   if (!selectedGame) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
-        <h2 className="text-2xl font-bold">🎮 게임을 골라봐!</h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold">게임을 골라봐</h2>
+          <p className="mt-1 text-sm text-muted">
+            {restaurants.length}개 음식점 중 하나를 뽑아줄게
+          </p>
+        </div>
+
+        <div className="grid w-full max-w-xs grid-cols-2 gap-3">
           {GAMES.map((game) => (
             <button
               key={game.id}
               onClick={() => setSelectedGame(game)}
-              className="flex flex-col items-center gap-2 rounded-2xl border-2 border-zinc-200 p-6 transition-all hover:scale-105 hover:border-orange-400 hover:shadow-lg dark:border-zinc-700"
+              className="group flex flex-col items-center gap-3 rounded-2xl border border-border bg-surface p-6 shadow-sm transition-all hover:border-primary hover:shadow-md active:scale-[0.97]"
             >
-              <span className="text-4xl">{game.icon}</span>
-              <span className="font-bold">{game.name}</span>
-              <span className="text-xs text-zinc-500">{game.description}</span>
+              <div className="rounded-xl bg-primary-light p-3 text-primary transition-colors group-hover:bg-primary group-hover:text-white">
+                <GameIcon name={game.icon} className="h-7 w-7" />
+              </div>
+              <div className="text-center">
+                <span className="block text-sm font-semibold">
+                  {game.name}
+                </span>
+                <span className="block text-xs text-muted">
+                  {game.description}
+                </span>
+              </div>
             </button>
           ))}
           <button
             onClick={() => setSelectedGame(getRandomGame())}
-            className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-zinc-300 p-6 transition-all hover:scale-105 hover:border-orange-400 dark:border-zinc-600"
+            className="group col-span-2 flex items-center justify-center gap-3 rounded-2xl border border-dashed border-border bg-surface-dim p-4 transition-all hover:border-primary hover:bg-primary-light active:scale-[0.97]"
           >
-            <span className="text-4xl">🎲</span>
-            <span className="font-bold">랜덤</span>
-            <span className="text-xs text-zinc-500">아무거나!</span>
+            <div className="text-muted transition-colors group-hover:text-primary">
+              <DiceIcon className="h-5 w-5" />
+            </div>
+            <span className="text-sm font-semibold text-muted group-hover:text-primary">
+              랜덤으로 고르기
+            </span>
           </button>
         </div>
-        <p className="text-sm text-zinc-400">
-          {restaurants.length}개 음식점을 찾았어요
-        </p>
       </div>
     );
   }
@@ -97,13 +121,11 @@ function PlayContent() {
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h2 className="text-xl font-bold">
-        {selectedGame.icon} {selectedGame.name}
-      </h2>
+      <h2 className="text-lg font-bold">{selectedGame.name}</h2>
       <GameComponent candidates={restaurants} onResult={handleResult} />
       <button
         onClick={() => setSelectedGame(null)}
-        className="text-sm text-zinc-400 underline hover:text-zinc-600"
+        className="text-sm text-muted transition-colors hover:text-foreground"
       >
         다른 게임 선택
       </button>
@@ -116,7 +138,7 @@ export default function PlayPage() {
     <Suspense
       fallback={
         <div className="flex flex-1 items-center justify-center">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-orange-500 border-t-transparent" />
+          <div className="h-10 w-10 animate-spin rounded-full border-3 border-primary border-t-transparent" />
         </div>
       }
     >

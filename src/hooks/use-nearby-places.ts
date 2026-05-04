@@ -3,10 +3,42 @@
 import { useCallback, useState } from "react";
 import type { Restaurant } from "@/types";
 
+const CACHE_KEY = "baegopa:places";
+
+interface CachedData {
+  restaurants: Restaurant[];
+  lat: number;
+  lng: number;
+  radius: number;
+}
+
 interface NearbyPlacesState {
   restaurants: Restaurant[];
   loading: boolean;
   error: string | null;
+}
+
+function getCache(lat: number, lng: number, radius: number): Restaurant[] | null {
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const cached: CachedData = JSON.parse(raw);
+    if (cached.lat === lat && cached.lng === lng && cached.radius === radius) {
+      return cached.restaurants;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function setCache(lat: number, lng: number, radius: number, restaurants: Restaurant[]) {
+  try {
+    const data: CachedData = { lat, lng, radius, restaurants };
+    sessionStorage.setItem(CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // ignore
+  }
 }
 
 export function useNearbyPlaces() {
@@ -18,6 +50,12 @@ export function useNearbyPlaces() {
 
   const fetchPlaces = useCallback(
     async (lat: number, lng: number, radius: number) => {
+      const cached = getCache(lat, lng, radius);
+      if (cached && cached.length > 0) {
+        setState({ restaurants: cached, loading: false, error: null });
+        return;
+      }
+
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
       try {
@@ -44,6 +82,7 @@ export function useNearbyPlaces() {
           return;
         }
 
+        setCache(lat, lng, radius, data.restaurants);
         setState({ restaurants: data.restaurants, loading: false, error: null });
       } catch {
         setState({
