@@ -5,40 +5,39 @@ import Matter from "matter-js";
 import type { GameProps } from "@/types";
 
 const WIDTH = 320;
-const HEIGHT = 480;
-const PIN_RADIUS = 5;
-const BALL_RADIUS = 10;
-const SLOT_HEIGHT = 50;
+const HEIGHT = 560;
+const BALL_RADIUS = 7;
+const GOAL_Y = HEIGHT - 40;
+const COLORS = [
+  "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
+  "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f43f5e",
+  "#a855f7", "#6366f1", "#10b981", "#f59e0b", "#e11d48",
+];
+
+interface BallData {
+  name: string;
+  color: string;
+  body: Matter.Body;
+}
 
 export function PinballGame({ candidates, onResult }: GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Matter.Engine | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
-  const [launched, setLaunched] = useState(false);
-  const [winner, setWinner] = useState<string>("");
+  const ballsRef = useRef<BallData[]>([]);
+  const [started, setStarted] = useState(false);
+  const [status, setStatus] = useState("");
+  const [winner, setWinner] = useState("");
   const resolvedRef = useRef(false);
 
-  const slotCount = Math.min(candidates.length, 8);
-  const slotWidth = WIDTH / slotCount;
+  const maxBalls = Math.min(candidates.length, 15);
 
-  const launch = useCallback(() => {
-    if (launched || !engineRef.current) return;
-    setLaunched(true);
+  const startGame = useCallback(() => {
+    if (started) return;
+    setStarted(true);
     resolvedRef.current = false;
+    setStatus("출발!");
 
-    const x = WIDTH / 2 + (Math.random() - 0.5) * 60;
-    const ball = Matter.Bodies.circle(x, 30, BALL_RADIUS, {
-      restitution: 0.5,
-      friction: 0.05,
-      density: 0.002,
-      render: { fillStyle: "#e85d24" },
-      label: "ball",
-    });
-
-    Matter.Composite.add(engineRef.current.world, ball);
-  }, [launched]);
-
-  useEffect(() => {
     if (!canvasRef.current) return;
 
     const engine = Matter.Engine.create({
@@ -46,131 +45,203 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     });
     engineRef.current = engine;
 
-    const walls = [
-      Matter.Bodies.rectangle(WIDTH / 2, HEIGHT + 25, WIDTH, 50, {
-        isStatic: true,
-        label: "floor",
-      }),
-      Matter.Bodies.rectangle(-25, HEIGHT / 2, 50, HEIGHT, {
-        isStatic: true,
-      }),
-      Matter.Bodies.rectangle(WIDTH + 25, HEIGHT / 2, 50, HEIGHT, {
-        isStatic: true,
-      }),
-    ];
+    // Walls
+    Matter.Composite.add(engine.world, [
+      Matter.Bodies.rectangle(WIDTH / 2, HEIGHT + 25, WIDTH, 50, { isStatic: true, label: "floor" }),
+      Matter.Bodies.rectangle(-10, HEIGHT / 2, 20, HEIGHT + 100, { isStatic: true, label: "wall" }),
+      Matter.Bodies.rectangle(WIDTH + 10, HEIGHT / 2, 20, HEIGHT + 100, { isStatic: true, label: "wall" }),
+    ]);
 
-    const pins: Matter.Body[] = [];
-    const rows = 7;
-    for (let row = 0; row < rows; row++) {
-      const cols = row % 2 === 0 ? 7 : 6;
-      const offsetX = row % 2 === 0 ? slotWidth / 2 : slotWidth;
+    // Peg rows - diamond pattern
+    const pegRows = 10;
+    for (let row = 0; row < pegRows; row++) {
+      const cols = row % 2 === 0 ? 8 : 7;
+      const spacing = WIDTH / (cols + 1);
+      const offsetX = row % 2 === 0 ? spacing : spacing + spacing / 2;
       for (let col = 0; col < cols; col++) {
-        const x = offsetX + col * (WIDTH / (cols + 1)) * 1.1;
-        const y = 80 + row * 45;
-        pins.push(
-          Matter.Bodies.circle(x, y, PIN_RADIUS, {
-            isStatic: true,
-            restitution: 0.8,
-            render: { fillStyle: "#d1d5db" },
-          })
+        const peg = Matter.Bodies.circle(
+          offsetX + col * spacing,
+          100 + row * 42,
+          5,
+          { isStatic: true, restitution: 0.8, label: "peg" }
         );
+        Matter.Composite.add(engine.world, peg);
       }
     }
 
-    const dividers: Matter.Body[] = [];
-    for (let i = 1; i < slotCount; i++) {
-      const x = i * slotWidth;
-      dividers.push(
-        Matter.Bodies.rectangle(x, HEIGHT - SLOT_HEIGHT / 2, 3, SLOT_HEIGHT, {
-          isStatic: true,
-          render: { fillStyle: "#6b7280" },
-        })
-      );
+    // Spinning obstacles (2 kinematic rotators)
+    const spinners = [
+      { x: WIDTH * 0.35, y: 220 },
+      { x: WIDTH * 0.65, y: 350 },
+    ];
+    for (const sp of spinners) {
+      const bar = Matter.Bodies.rectangle(sp.x, sp.y, 60, 6, {
+        isStatic: true,
+        label: "spinner",
+        chamfer: { radius: 3 },
+      });
+      Matter.Body.setAngularVelocity(bar, 0.05);
+      Matter.Composite.add(engine.world, bar);
+
+      // Spin the bar manually each frame
+      Matter.Events.on(engine, "beforeUpdate", () => {
+        Matter.Body.rotate(bar, 0.04);
+      });
     }
 
-    Matter.Composite.add(engine.world, [...walls, ...pins, ...dividers]);
+    // Deflectors - angled walls
+    const deflectors = [
+      { x: 60, y: 160, angle: 0.4, w: 50 },
+      { x: WIDTH - 60, y: 160, angle: -0.4, w: 50 },
+      { x: 80, y: 290, angle: -0.3, w: 45 },
+      { x: WIDTH - 80, y: 290, angle: 0.3, w: 45 },
+      { x: WIDTH / 2, y: 420, angle: 0.2, w: 55 },
+    ];
+    for (const d of deflectors) {
+      const body = Matter.Bodies.rectangle(d.x, d.y, d.w, 5, {
+        isStatic: true,
+        angle: d.angle,
+        restitution: 0.5,
+        label: "deflector",
+        chamfer: { radius: 2 },
+      });
+      Matter.Composite.add(engine.world, body);
+    }
+
+    // Goal line marker (visual only)
+    // No physics body needed
+
+    // Create balls with slight stagger
+    const balls: BallData[] = [];
+    const selected = candidates.slice(0, maxBalls);
+    for (let i = 0; i < selected.length; i++) {
+      const x = WIDTH / 2 + (i - selected.length / 2) * 16 + (Math.random() - 0.5) * 8;
+      const y = 20 + Math.floor(i / 5) * 16;
+      const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
+        restitution: 0.5,
+        friction: 0.02,
+        density: 0.001,
+        label: `ball-${i}`,
+      });
+      balls.push({ name: selected[i].name, color: COLORS[i % COLORS.length], body });
+      Matter.Composite.add(engine.world, body);
+    }
+    ballsRef.current = balls;
 
     const runner = Matter.Runner.create();
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
+  }, [started, candidates, maxBalls]);
+
+  // Render loop + goal detection
+  useEffect(() => {
+    if (!canvasRef.current || !started) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d")!;
-
-    const slotLabels = candidates.slice(0, slotCount).map((r) =>
-      r.name.length > 4 ? r.name.slice(0, 4) + "…" : r.name
-    );
-
     let animId: number;
+
     const render = () => {
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
-      ctx.fillStyle = "var(--surface, #ffffff)";
+      // Background
+      ctx.fillStyle = "#0f172a";
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-      for (let i = 0; i < slotCount; i++) {
-        const x = i * slotWidth;
-        ctx.fillStyle = i % 2 === 0 ? "#fef3ee" : "#f0fdf4";
-        ctx.fillRect(x, HEIGHT - SLOT_HEIGHT, slotWidth, SLOT_HEIGHT);
+      const engine = engineRef.current;
+      if (!engine) { animId = requestAnimationFrame(render); return; }
 
-        ctx.fillStyle = "#374151";
-        ctx.font = "bold 10px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(
-          slotLabels[i],
-          x + slotWidth / 2,
-          HEIGHT - SLOT_HEIGHT / 2 + 4
-        );
+      // Draw goal line
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, GOAL_Y);
+      ctx.lineTo(WIDTH, GOAL_Y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = "#fbbf2440";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("GOAL", WIDTH / 2, GOAL_Y + 14);
+
+      // Draw static bodies
+      for (const body of Matter.Composite.allBodies(engine.world)) {
+        if (body.label === "peg") {
+          ctx.beginPath();
+          ctx.arc(body.position.x, body.position.y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = "#475569";
+          ctx.fill();
+          ctx.strokeStyle = "#64748b";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        if (body.label === "spinner") {
+          ctx.save();
+          ctx.translate(body.position.x, body.position.y);
+          ctx.rotate(body.angle);
+          ctx.fillStyle = "#f59e0b";
+          ctx.beginPath();
+          ctx.roundRect(-30, -3, 60, 6, 3);
+          ctx.fill();
+          ctx.restore();
+        }
+        if (body.label === "deflector") {
+          ctx.save();
+          ctx.translate(body.position.x, body.position.y);
+          ctx.rotate(body.angle);
+          const w = body.bounds.max.x - body.bounds.min.x;
+          ctx.fillStyle = "#06b6d4";
+          ctx.beginPath();
+          ctx.roundRect(-w / 2, -2.5, w, 5, 2);
+          ctx.fill();
+          ctx.restore();
+        }
       }
 
-      for (const body of Matter.Composite.allBodies(engine.world)) {
-        if (body.isStatic && body.label !== "floor") {
-          const { x, y } = body.position;
-          if (body.circleRadius) {
-            ctx.beginPath();
-            ctx.arc(x, y, body.circleRadius, 0, Math.PI * 2);
-            ctx.fillStyle = "#9ca3af";
-            ctx.fill();
-          } else if (
-            body.bounds.max.x - body.bounds.min.x < 10 &&
-            body.bounds.max.y - body.bounds.min.y > 10
-          ) {
-            ctx.fillStyle = "#d1d5db";
-            ctx.fillRect(
-              body.bounds.min.x,
-              body.bounds.min.y,
-              body.bounds.max.x - body.bounds.min.x,
-              body.bounds.max.y - body.bounds.min.y
-            );
-          }
-        }
+      // Draw balls
+      for (const ball of ballsRef.current) {
+        const { x, y } = ball.body.position;
+        ctx.beginPath();
+        ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
 
-        if (body.label === "ball") {
-          const { x, y } = body.position;
+        // Highlight shine
+        ctx.beginPath();
+        ctx.arc(x - 2, y - 2, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.fill();
+      }
+
+      // Winner glow
+      if (winner) {
+        const winBall = ballsRef.current.find((b) => b.name === winner);
+        if (winBall) {
+          const { x, y } = winBall.body.position;
           ctx.beginPath();
-          ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
-          ctx.fillStyle = "#e85d24";
-          ctx.fill();
-          ctx.strokeStyle = "#c2410c";
-          ctx.lineWidth = 1.5;
+          ctx.arc(x, y, BALL_RADIUS + 6, 0, Math.PI * 2);
+          ctx.strokeStyle = "#fbbf24";
+          ctx.lineWidth = 3;
           ctx.stroke();
+        }
+      }
 
-          if (
-            !resolvedRef.current &&
-            y > HEIGHT - SLOT_HEIGHT - BALL_RADIUS &&
-            Math.abs(body.velocity.y) < 0.5
-          ) {
+      // Goal detection
+      if (!resolvedRef.current) {
+        for (const ball of ballsRef.current) {
+          if (ball.body.position.y >= GOAL_Y) {
             resolvedRef.current = true;
-            const slotIndex = Math.min(
-              Math.floor(x / slotWidth),
-              slotCount - 1
-            );
-            const selected = candidates[Math.max(0, slotIndex)];
-            setWinner(selected.name);
+            setWinner(ball.name);
+            setStatus("도착!");
 
-            setTimeout(() => {
-              onResult(selected);
-            }, 1500);
+            const result = candidates.find((c) => c.name === ball.name) || candidates[0];
+            setTimeout(() => onResult(result), 2000);
+            break;
           }
         }
       }
@@ -179,41 +250,44 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     };
 
     render();
+    return () => cancelAnimationFrame(animId);
+  }, [started, winner, candidates, onResult]);
 
+  useEffect(() => {
     return () => {
-      cancelAnimationFrame(animId);
-      Matter.Runner.stop(runner);
-      Matter.Engine.clear(engine);
+      if (runnerRef.current) Matter.Runner.stop(runnerRef.current);
+      if (engineRef.current) Matter.Engine.clear(engineRef.current);
     };
-  }, [candidates, slotCount, slotWidth, onResult]);
+  }, []);
 
   return (
     <div className="flex flex-col items-center gap-4">
       <div className="h-7 flex items-center justify-center">
         {winner ? (
           <span className="text-lg font-bold text-primary">{winner}</span>
-        ) : launched ? (
-          <span className="text-sm text-muted">공이 내려가는 중...</span>
+        ) : status ? (
+          <span className="text-sm font-medium text-muted">{status}</span>
         ) : (
-          <span className="text-sm text-muted">공을 발사해보세요</span>
+          <span className="text-sm text-muted">마블 레이스!</span>
         )}
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-border shadow-lg">
-        <canvas
-          ref={canvasRef}
-          width={WIDTH}
-          height={HEIGHT}
-          className="bg-surface"
-        />
+      <div className="relative overflow-hidden rounded-2xl border border-border shadow-lg">
+        <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} />
+        {!started && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 backdrop-blur-sm">
+            <p className="text-lg font-bold text-white">{maxBalls}개 구슬 레이스</p>
+            <p className="text-xs text-white/70">먼저 골인하는 구슬이 당첨!</p>
+          </div>
+        )}
       </div>
 
       <button
-        onClick={launch}
-        disabled={launched}
+        onClick={startGame}
+        disabled={started}
         className="rounded-full bg-primary px-10 py-3.5 text-base font-bold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50 disabled:hover:shadow-md"
       >
-        {launched ? (winner ? "결과 확인 중..." : "떨어지는 중...") : "발사!"}
+        {started ? (winner ? "결과 확인 중..." : "레이스 중...") : "시작!"}
       </button>
     </div>
   );

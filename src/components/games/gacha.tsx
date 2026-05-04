@@ -1,163 +1,253 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useRef, useState, useCallback } from "react";
+import Matter from "matter-js";
 import type { GameProps } from "@/types";
 
-const CAPSULE_COLORS = [
-  "from-red-400 to-red-600",
-  "from-blue-400 to-blue-600",
-  "from-green-400 to-green-600",
-  "from-purple-400 to-purple-600",
-  "from-yellow-400 to-yellow-600",
-  "from-pink-400 to-pink-600",
+const SIZE = 300;
+const RADIUS = 120;
+const BALL_RADIUS = 12;
+const CENTER = SIZE / 2;
+const COLORS = [
+  "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
+  "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f43f5e",
+  "#a855f7", "#6366f1", "#10b981", "#f59e0b", "#e11d48",
 ];
 
-type Phase = "idle" | "cranking" | "dropping" | "opening" | "revealed";
+interface BallData {
+  name: string;
+  color: string;
+  body: Matter.Body;
+}
 
 export function GachaGame({ candidates, onResult }: GameProps) {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [winner, setWinner] = useState<string>("");
-  const [capsuleColor] = useState(
-    () => CAPSULE_COLORS[Math.floor(Math.random() * CAPSULE_COLORS.length)]
-  );
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const engineRef = useRef<Matter.Engine | null>(null);
+  const runnerRef = useRef<Matter.Runner | null>(null);
+  const ballsRef = useRef<BallData[]>([]);
+  const [phase, setPhase] = useState<"idle" | "mixing" | "picking" | "done">("idle");
+  const [winner, setWinner] = useState("");
+  const resolvedRef = useRef(false);
+  const mixAngleRef = useRef(0);
 
-  const handleCrank = useCallback(() => {
+  const maxBalls = Math.min(candidates.length, 15);
+
+  const startGame = useCallback(() => {
     if (phase !== "idle") return;
-    setPhase("cranking");
+    setPhase("mixing");
+    resolvedRef.current = false;
 
-    const selected = candidates[Math.floor(Math.random() * candidates.length)];
+    if (!canvasRef.current) return;
 
+    const engine = Matter.Engine.create({
+      gravity: { x: 0, y: 0, scale: 0 },
+    });
+    engineRef.current = engine;
+
+    // Circular boundary using edge segments
+    const segments = 32;
+    for (let i = 0; i < segments; i++) {
+      const angle1 = (i / segments) * Math.PI * 2;
+      const angle2 = ((i + 1) / segments) * Math.PI * 2;
+      const x1 = CENTER + Math.cos(angle1) * RADIUS;
+      const y1 = CENTER + Math.sin(angle1) * RADIUS;
+      const x2 = CENTER + Math.cos(angle2) * RADIUS;
+      const y2 = CENTER + Math.sin(angle2) * RADIUS;
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      const len = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+
+      const wall = Matter.Bodies.rectangle(mx, my, len, 4, {
+        isStatic: true,
+        angle,
+        restitution: 0.9,
+        label: "boundary",
+      });
+      Matter.Composite.add(engine.world, wall);
+    }
+
+    // Create balls
+    const balls: BallData[] = [];
+    const selected = candidates.slice(0, maxBalls);
+    for (let i = 0; i < selected.length; i++) {
+      const angle = (i / selected.length) * Math.PI * 2;
+      const dist = 30 + Math.random() * 50;
+      const x = CENTER + Math.cos(angle) * dist;
+      const y = CENTER + Math.sin(angle) * dist;
+      const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
+        restitution: 0.8,
+        friction: 0.01,
+        density: 0.001,
+        label: `ball-${i}`,
+      });
+      balls.push({ name: selected[i].name, color: COLORS[i % COLORS.length], body });
+      Matter.Composite.add(engine.world, body);
+    }
+    ballsRef.current = balls;
+
+    const runner = Matter.Runner.create();
+    runnerRef.current = runner;
+    Matter.Runner.run(runner, engine);
+
+    // Apply mixing force via rotating gravity
+    mixAngleRef.current = 0;
+    Matter.Events.on(engine, "beforeUpdate", () => {
+      if (resolvedRef.current) return;
+      mixAngleRef.current += 0.12;
+      const gx = Math.cos(mixAngleRef.current) * 0.003;
+      const gy = Math.sin(mixAngleRef.current) * 0.003;
+      engine.gravity.x = gx;
+      engine.gravity.y = gy;
+      engine.gravity.scale = 1;
+    });
+
+    // After mixing, pick a winner
     setTimeout(() => {
-      setPhase("dropping");
-    }, 800);
+      if (resolvedRef.current) return;
+      setPhase("picking");
 
-    setTimeout(() => {
-      setPhase("opening");
-    }, 1800);
+      // Slow down
+      engine.gravity.scale = 0;
+      for (const ball of balls) {
+        Matter.Body.setVelocity(ball.body, { x: 0, y: 0 });
+      }
 
-    setTimeout(() => {
-      setWinner(selected.name);
-      setPhase("revealed");
-    }, 2600);
+      setTimeout(() => {
+        if (resolvedRef.current) return;
+        resolvedRef.current = true;
 
-    setTimeout(() => {
-      onResult(selected);
-    }, 4000);
-  }, [phase, candidates, onResult]);
+        const winnerBall = balls[Math.floor(Math.random() * balls.length)];
+        setWinner(winnerBall.name);
+        setPhase("done");
+
+        const result = candidates.find((c) => c.name === winnerBall.name) || candidates[0];
+        setTimeout(() => onResult(result), 2500);
+      }, 800);
+    }, 3500);
+  }, [phase, candidates, maxBalls, onResult]);
+
+  // Render
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d")!;
+    let animId: number;
+
+    const render = () => {
+      ctx.clearRect(0, 0, SIZE, SIZE);
+
+      // Background
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, SIZE, SIZE);
+
+      // Circle boundary glow
+      ctx.beginPath();
+      ctx.arc(CENTER, CENTER, RADIUS + 2, 0, Math.PI * 2);
+      ctx.strokeStyle = phase === "mixing" ? "#38bdf8" : phase === "picking" ? "#fbbf24" : "#475569";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Inner circle fill
+      ctx.beginPath();
+      ctx.arc(CENTER, CENTER, RADIUS - 2, 0, Math.PI * 2);
+      ctx.fillStyle = "#1e293b";
+      ctx.fill();
+
+      // Draw balls
+      for (const ball of ballsRef.current) {
+        const { x, y } = ball.body.position;
+        const isWinner = winner && ball.name === winner;
+
+        // Ball shadow
+        ctx.beginPath();
+        ctx.arc(x + 1, y + 1, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.3)";
+        ctx.fill();
+
+        // Ball
+        ctx.beginPath();
+        ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+
+        if (isWinner) {
+          // Winner glow
+          ctx.beginPath();
+          ctx.arc(x, y, BALL_RADIUS + 6, 0, Math.PI * 2);
+          ctx.strokeStyle = "#fbbf24";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+
+          // Winner name
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 11px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            ball.name.length > 5 ? ball.name.slice(0, 5) + "…" : ball.name,
+            x, y - BALL_RADIUS - 10
+          );
+        }
+
+        // Ball shine
+        ctx.beginPath();
+        ctx.arc(x - 3, y - 3, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,255,255,0.4)";
+        ctx.fill();
+
+        // Number label (non-winner)
+        if (!isWinner) {
+          ctx.fillStyle = "rgba(255,255,255,0.8)";
+          ctx.font = "bold 8px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(
+            ball.name.length > 3 ? ball.name.slice(0, 3) : ball.name,
+            x, y
+          );
+          ctx.textBaseline = "alphabetic";
+        }
+      }
+
+      animId = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => cancelAnimationFrame(animId);
+  }, [phase, winner]);
+
+  useEffect(() => {
+    return () => {
+      if (runnerRef.current) Matter.Runner.stop(runnerRef.current);
+      if (engineRef.current) Matter.Engine.clear(engineRef.current);
+    };
+  }, []);
 
   return (
-    <div className="flex flex-col items-center gap-6">
-      <div className="h-7 flex items-center justify-center">
-        {phase === "revealed" ? (
+    <div className="flex flex-col items-center gap-5">
+      <div className="h-8 flex items-center justify-center">
+        {phase === "done" ? (
           <span className="text-lg font-bold text-primary">{winner}</span>
         ) : phase === "idle" ? (
-          <span className="text-sm text-muted">레버를 돌려보세요</span>
+          <span className="text-sm text-muted">공을 섞어볼까?</span>
+        ) : phase === "mixing" ? (
+          <span className="text-sm font-medium text-muted">섞는 중...</span>
         ) : (
-          <span className="text-sm text-muted">뽑는 중...</span>
+          <span className="text-sm font-medium text-amber-500">선택 중...</span>
         )}
       </div>
 
-      <div className="relative flex flex-col items-center">
-        {/* Machine body */}
-        <div className="relative w-56 h-64 rounded-3xl bg-gradient-to-b from-gray-100 to-gray-200 border-2 border-gray-300 shadow-lg overflow-hidden dark:from-gray-800 dark:to-gray-900 dark:border-gray-700">
-          {/* Glass dome top */}
-          <div className="absolute inset-x-4 top-4 h-32 rounded-2xl bg-white/60 border border-white/80 backdrop-blur-sm overflow-hidden dark:bg-white/10 dark:border-white/20">
-            {/* Mini capsules inside */}
-            <div className="relative w-full h-full">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  className={`absolute w-6 h-6 rounded-full bg-gradient-to-br ${CAPSULE_COLORS[i % CAPSULE_COLORS.length]} shadow-sm`}
-                  style={{
-                    left: `${15 + (i % 4) * 20}%`,
-                    top: `${20 + Math.floor(i / 4) * 35}%`,
-                  }}
-                  animate={
-                    phase === "cranking"
-                      ? {
-                          x: [0, (i % 2 === 0 ? 5 : -5), 0],
-                          y: [0, -3, 2, 0],
-                        }
-                      : {}
-                  }
-                  transition={{
-                    duration: 0.3,
-                    repeat: phase === "cranking" ? 3 : 0,
-                    delay: i * 0.05,
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Dispensing slot */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-14 h-10 rounded-lg bg-gray-800 border-2 border-gray-600 dark:bg-gray-950 dark:border-gray-600" />
-        </div>
-
-        {/* Crank handle */}
-        <motion.button
-          onClick={handleCrank}
-          disabled={phase !== "idle"}
-          className="absolute -right-6 top-20 flex flex-col items-center disabled:cursor-default"
-          animate={
-            phase === "cranking"
-              ? { rotate: [0, 360] }
-              : {}
-          }
-          transition={{ duration: 0.8, ease: "easeInOut" }}
-        >
-          <div className="w-4 h-16 rounded-full bg-gradient-to-b from-gray-400 to-gray-500 shadow-md" />
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-red-500 to-red-700 shadow-lg border-2 border-red-400" />
-        </motion.button>
-
-        {/* Dropping capsule animation */}
-        <AnimatePresence>
-          {(phase === "dropping" || phase === "opening" || phase === "revealed") && (
-            <motion.div
-              className="absolute -bottom-4 left-1/2"
-              initial={{ y: -40, x: "-50%", scale: 0.5, opacity: 0 }}
-              animate={{
-                y: phase === "dropping" ? [-40, 20] : 20,
-                x: "-50%",
-                scale: phase === "opening" || phase === "revealed" ? [1, 1.2, 1] : 1,
-                opacity: 1,
-              }}
-              transition={{
-                y: { duration: 0.6, ease: "easeIn" },
-                scale: { duration: 0.4, delay: phase === "opening" ? 0 : 0.6 },
-              }}
-            >
-              <div className={`relative w-16 h-16 rounded-full bg-gradient-to-br ${capsuleColor} shadow-xl`}>
-                {/* Capsule split line */}
-                <div className="absolute inset-x-0 top-1/2 h-0.5 bg-black/20" />
-
-                {/* Revealed text */}
-                <AnimatePresence>
-                  {phase === "revealed" && (
-                    <motion.div
-                      className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-primary px-3 py-1.5 text-sm font-bold text-white shadow-lg"
-                      initial={{ opacity: 0, y: 10, scale: 0.8 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      transition={{ type: "spring", stiffness: 400, damping: 15 }}
-                    >
-                      {winner}
-                      <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 h-2 w-2 rotate-45 bg-primary" />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      <div className="overflow-hidden rounded-full border-2 border-border shadow-xl">
+        <canvas ref={canvasRef} width={SIZE} height={SIZE} />
       </div>
 
       <button
-        onClick={handleCrank}
+        onClick={startGame}
         disabled={phase !== "idle"}
-        className="mt-8 rounded-full bg-primary px-10 py-3.5 text-base font-bold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50 disabled:hover:shadow-md"
+        className="rounded-full bg-primary px-10 py-3.5 text-base font-bold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50 disabled:hover:shadow-md"
       >
-        {phase === "idle" ? "뽑기!" : phase === "revealed" ? "결과 확인 중..." : "뽑는 중..."}
+        {phase === "idle" ? "추첨!" : phase === "done" ? "결과 확인 중..." : "돌아가는 중..."}
       </button>
     </div>
   );
