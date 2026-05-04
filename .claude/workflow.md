@@ -26,12 +26,18 @@ pnpm check        # lint + typecheck
 ## Git 브랜치 워크플로
 
 ```
-main (배포) ← feat/xxx (작업)
+main (배포) ← develop (통합) ← feat/xxx (작업)
 ```
 
-- 단순 프로젝트이므로 main + feature 브랜치로 충분
-- feature 브랜치에서 작업 → PR → main 머지
-- main 직접 커밋은 초기 셋업이나 사소한 수정에만 허용
+1. **작업 브랜치 생성**: 항상 `develop` 기준으로 생성 (`git checkout -b feat/xxx develop`)
+2. **PR 생성**: 항상 `--base develop` 으로 생성. **절대 main 대상 PR을 임의로 만들지 않는다.**
+3. **develop 머지**: squash merge
+4. **main 머지**: 사용자가 "main에 머지해", "배포하자" 등 **명시적으로 요청할 때만** develop → main PR 생성
+
+> **금지사항:**
+> - main 직접 커밋 금지
+> - develop 직접 커밋 금지 (초기 셋업 제외)
+> - 사용자 요청 없이 main 대상 PR 생성 금지
 
 ---
 

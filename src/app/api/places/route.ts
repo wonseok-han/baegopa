@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
+const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
@@ -15,42 +15,34 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (!GOOGLE_PLACES_API_KEY) {
+  if (!KAKAO_REST_API_KEY) {
     return NextResponse.json(
       { error: "API key가 설정되지 않았습니다" },
       { status: 500 }
     );
   }
 
-  const body = {
-    includedTypes: ["restaurant", "cafe", "meal_takeaway"],
-    locationRestriction: {
-      circle: {
-        center: { latitude: parseFloat(lat), longitude: parseFloat(lng) },
-        radius: parseFloat(radius),
-      },
-    },
-    maxResultCount: 20,
-    languageCode: "ko",
-  };
+  const params = new URLSearchParams({
+    category_group_code: "FD6",
+    x: lng,
+    y: lat,
+    radius,
+    size: "15",
+    sort: "distance",
+  });
 
   const res = await fetch(
-    "https://places.googleapis.com/v1/places:searchNearby",
+    `https://dapi.kakao.com/v2/local/search/category.json?${params}`,
     {
-      method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
-        "X-Goog-FieldMask":
-          "places.id,places.displayName,places.primaryType,places.shortFormattedAddress,places.location,places.rating,places.photos",
+        Authorization: `KakaoAK ${KAKAO_REST_API_KEY}`,
       },
-      body: JSON.stringify(body),
     }
   );
 
   if (!res.ok) {
     const errorText = await res.text();
-    console.error("Google Places API error:", errorText);
+    console.error("Kakao API error:", errorText);
     return NextResponse.json(
       { error: "음식점 검색에 실패했습니다" },
       { status: 502 }
@@ -58,69 +50,36 @@ export async function GET(request: NextRequest) {
   }
 
   const data = await res.json();
-  const userLat = parseFloat(lat);
-  const userLng = parseFloat(lng);
 
-  const restaurants = (data.places || []).map(
+  const restaurants = (data.documents || []).map(
     (place: {
       id: string;
-      displayName?: { text: string };
-      primaryType?: string;
-      shortFormattedAddress?: string;
-      location?: { latitude: number; longitude: number };
-      rating?: number;
-      photos?: { name: string }[];
+      place_name: string;
+      category_name: string;
+      road_address_name: string;
+      address_name: string;
+      distance: string;
+      x: string;
+      y: string;
+      place_url: string;
     }) => ({
       placeId: place.id,
-      name: place.displayName?.text || "이름 없음",
-      category: mapCategory(place.primaryType),
-      distance: calculateDistance(
-        userLat,
-        userLng,
-        place.location?.latitude || 0,
-        place.location?.longitude || 0
-      ),
-      rating: place.rating,
-      address: place.shortFormattedAddress || "",
+      name: place.place_name,
+      category: extractCategory(place.category_name),
+      distance: parseInt(place.distance) || 0,
+      address: place.road_address_name || place.address_name,
       location: {
-        lat: place.location?.latitude || 0,
-        lng: place.location?.longitude || 0,
+        lat: parseFloat(place.y),
+        lng: parseFloat(place.x),
       },
-      photoUrl: place.photos?.[0]
-        ? `https://places.googleapis.com/v1/${place.photos[0].name}/media?maxHeightPx=200&key=${GOOGLE_PLACES_API_KEY}`
-        : undefined,
+      placeUrl: place.place_url,
     })
   );
 
   return NextResponse.json({ restaurants, total: restaurants.length });
 }
 
-function mapCategory(type?: string): string {
-  const map: Record<string, string> = {
-    restaurant: "음식점",
-    cafe: "카페",
-    meal_takeaway: "포장",
-    korean_restaurant: "한식",
-    japanese_restaurant: "일식",
-    chinese_restaurant: "중식",
-    italian_restaurant: "양식",
-  };
-  return map[type || ""] || "음식점";
-}
-
-function calculateDistance(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number
-): number {
-  const R = 6371000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+function extractCategory(categoryName: string): string {
+  const parts = categoryName.split(" > ");
+  return parts[parts.length - 1] || "음식점";
 }

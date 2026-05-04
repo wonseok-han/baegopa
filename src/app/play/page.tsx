@@ -30,9 +30,7 @@ function PlayContent() {
         category: selected.category,
         distance: String(selected.distance),
         address: selected.address,
-        lat: String(selected.location.lat),
-        lng: String(selected.location.lng),
-        ...(selected.rating ? { rating: String(selected.rating) } : {}),
+        ...(selected.placeUrl ? { placeUrl: selected.placeUrl } : {}),
       });
       router.push(`/result?${params.toString()}`);
     },
