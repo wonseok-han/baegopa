@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getStoredLocation } from "@/lib/storage";
 
 interface GeolocationState {
@@ -10,13 +10,19 @@ interface GeolocationState {
 }
 
 export function useGeolocation() {
-  const [state, setState] = useState<GeolocationState>(() => {
+  const [state, setState] = useState<GeolocationState>({
+    coordinates: null,
+    error: null,
+    loading: false,
+  });
+
+  useEffect(() => {
     const stored = getStoredLocation();
     if (stored) {
-      return { coordinates: { lat: stored.lat, lng: stored.lng }, error: null, loading: false };
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setState({ coordinates: { lat: stored.lat, lng: stored.lng }, error: null, loading: false });
     }
-    return { coordinates: null, error: null, loading: false };
-  });
+  }, []);
 
   const requestPermission = useCallback(() => {
     if (!navigator.geolocation) {
