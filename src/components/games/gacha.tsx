@@ -12,6 +12,7 @@ const COLORS = [
   "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
   "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f43f5e",
   "#a855f7", "#6366f1", "#10b981", "#f59e0b", "#e11d48",
+  "#84cc16", "#0ea5e9", "#d946ef", "#f472b6", "#2dd4bf",
 ];
 
 interface BallData {
@@ -20,22 +21,24 @@ interface BallData {
   body: Matter.Body;
 }
 
+type Phase = "idle" | "mixing" | "slowing" | "revealing" | "done";
+
 export function GachaGame({ candidates, onResult }: GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Matter.Engine | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
   const ballsRef = useRef<BallData[]>([]);
-  const [phase, setPhase] = useState<"idle" | "mixing" | "picking" | "done">("idle");
+  const [phase, setPhase] = useState<Phase>("idle");
   const [winner, setWinner] = useState("");
-  const resolvedRef = useRef(false);
+  const winnerRef = useRef<BallData | null>(null);
+  const revealProgressRef = useRef(0);
   const mixAngleRef = useRef(0);
 
-  const maxBalls = Math.min(candidates.length, 15);
+  const maxBalls = Math.min(candidates.length, 20);
 
   const startGame = useCallback(() => {
     if (phase !== "idle") return;
     setPhase("mixing");
-    resolvedRef.current = false;
 
     if (!canvasRef.current) return;
 
@@ -44,8 +47,8 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     });
     engineRef.current = engine;
 
-    // Circular boundary using edge segments
-    const segments = 32;
+    // Circular boundary
+    const segments = 36;
     for (let i = 0; i < segments; i++) {
       const angle1 = (i / segments) * Math.PI * 2;
       const angle2 = ((i + 1) / segments) * Math.PI * 2;
@@ -58,13 +61,11 @@ export function GachaGame({ candidates, onResult }: GameProps) {
       const len = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
       const angle = Math.atan2(y2 - y1, x2 - x1);
 
-      const wall = Matter.Bodies.rectangle(mx, my, len, 4, {
-        isStatic: true,
-        angle,
-        restitution: 0.9,
-        label: "boundary",
-      });
-      Matter.Composite.add(engine.world, wall);
+      Matter.Composite.add(engine.world,
+        Matter.Bodies.rectangle(mx, my, len, 4, {
+          isStatic: true, angle, restitution: 0.9, label: "boundary",
+        })
+      );
     }
 
     // Create balls
@@ -72,14 +73,11 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     const selected = candidates.slice(0, maxBalls);
     for (let i = 0; i < selected.length; i++) {
       const angle = (i / selected.length) * Math.PI * 2;
-      const dist = 30 + Math.random() * 50;
+      const dist = 20 + Math.random() * 60;
       const x = CENTER + Math.cos(angle) * dist;
       const y = CENTER + Math.sin(angle) * dist;
       const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.8,
-        friction: 0.01,
-        density: 0.001,
-        label: `ball-${i}`,
+        restitution: 0.8, friction: 0.01, density: 0.001, label: `ball-${i}`,
       });
       balls.push({ name: selected[i].name, color: COLORS[i % COLORS.length], body });
       Matter.Composite.add(engine.world, body);
@@ -90,40 +88,48 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
 
-    // Apply mixing force via rotating gravity
+    // Rotating gravity for mixing
     mixAngleRef.current = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
-      if (resolvedRef.current) return;
+      if (winnerRef.current) return;
       mixAngleRef.current += 0.12;
-      const gx = Math.cos(mixAngleRef.current) * 0.003;
-      const gy = Math.sin(mixAngleRef.current) * 0.003;
-      engine.gravity.x = gx;
-      engine.gravity.y = gy;
+      engine.gravity.x = Math.cos(mixAngleRef.current) * 0.004;
+      engine.gravity.y = Math.sin(mixAngleRef.current) * 0.004;
       engine.gravity.scale = 1;
     });
 
-    // After mixing, pick a winner
+    // After mixing, slow down then pick
     setTimeout(() => {
-      if (resolvedRef.current) return;
-      setPhase("picking");
-
-      // Slow down
-      engine.gravity.scale = 0;
-      for (const ball of balls) {
-        Matter.Body.setVelocity(ball.body, { x: 0, y: 0 });
-      }
+      setPhase("slowing");
+      // Gradually reduce velocities
+      const slowInterval = setInterval(() => {
+        for (const ball of balls) {
+          const v = ball.body.velocity;
+          Matter.Body.setVelocity(ball.body, { x: v.x * 0.85, y: v.y * 0.85 });
+        }
+      }, 50);
 
       setTimeout(() => {
-        if (resolvedRef.current) return;
-        resolvedRef.current = true;
+        clearInterval(slowInterval);
+        engine.gravity.scale = 0;
+        for (const ball of balls) {
+          Matter.Body.setVelocity(ball.body, { x: 0, y: 0 });
+        }
 
-        const winnerBall = balls[Math.floor(Math.random() * balls.length)];
-        setWinner(winnerBall.name);
-        setPhase("done");
+        // Pick winner
+        const picked = balls[Math.floor(Math.random() * balls.length)];
+        winnerRef.current = picked;
+        setWinner(picked.name);
+        setPhase("revealing");
+        revealProgressRef.current = 0;
 
-        const result = candidates.find((c) => c.name === winnerBall.name) || candidates[0];
-        setTimeout(() => onResult(result), 2500);
-      }, 800);
+        // After reveal animation completes
+        const result = candidates.find((c) => c.name === picked.name) || candidates[0];
+        setTimeout(() => {
+          setPhase("done");
+          setTimeout(() => onResult(result), 1500);
+        }, 2000);
+      }, 1000);
     }, 3500);
   }, [phase, candidates, maxBalls, onResult]);
 
@@ -137,75 +143,107 @@ export function GachaGame({ candidates, onResult }: GameProps) {
 
     const render = () => {
       ctx.clearRect(0, 0, SIZE, SIZE);
-
-      // Background
       ctx.fillStyle = "#0f172a";
       ctx.fillRect(0, 0, SIZE, SIZE);
 
-      // Circle boundary glow
+      // Circle boundary
       ctx.beginPath();
       ctx.arc(CENTER, CENTER, RADIUS + 2, 0, Math.PI * 2);
-      ctx.strokeStyle = phase === "mixing" ? "#38bdf8" : phase === "picking" ? "#fbbf24" : "#475569";
+      ctx.strokeStyle = phase === "mixing" ? "#38bdf8" : phase === "revealing" || phase === "done" ? "#fbbf24" : "#475569";
       ctx.lineWidth = 3;
       ctx.stroke();
 
-      // Inner circle fill
       ctx.beginPath();
       ctx.arc(CENTER, CENTER, RADIUS - 2, 0, Math.PI * 2);
       ctx.fillStyle = "#1e293b";
       ctx.fill();
 
-      // Draw balls
+      const winBall = winnerRef.current;
+      const isRevealing = phase === "revealing" || phase === "done";
+
+      // Animate reveal progress
+      if (isRevealing && revealProgressRef.current < 1) {
+        revealProgressRef.current = Math.min(1, revealProgressRef.current + 0.02);
+      }
+      const t = revealProgressRef.current;
+
+      // Draw non-winner balls (fade out during reveal)
       for (const ball of ballsRef.current) {
+        if (winBall && ball.name === winBall.name) continue;
         const { x, y } = ball.body.position;
-        const isWinner = winner && ball.name === winner;
 
-        // Ball shadow
-        ctx.beginPath();
-        ctx.arc(x + 1, y + 1, BALL_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(0,0,0,0.3)";
-        ctx.fill();
+        const alpha = isRevealing ? Math.max(0.15, 1 - t * 0.85) : 1;
+        const scale = isRevealing ? Math.max(0.6, 1 - t * 0.4) : 1;
+        const r = BALL_RADIUS * scale;
 
-        // Ball
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
-        ctx.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fillStyle = ball.color;
         ctx.fill();
 
-        if (isWinner) {
-          // Winner glow
-          ctx.beginPath();
-          ctx.arc(x, y, BALL_RADIUS + 6, 0, Math.PI * 2);
-          ctx.strokeStyle = "#fbbf24";
-          ctx.lineWidth = 3;
-          ctx.stroke();
-
-          // Winner name
-          ctx.fillStyle = "#ffffff";
-          ctx.font = "bold 11px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(
-            ball.name.length > 5 ? ball.name.slice(0, 5) + "…" : ball.name,
-            x, y - BALL_RADIUS - 10
-          );
-        }
-
-        // Ball shine
-        ctx.beginPath();
-        ctx.arc(x - 3, y - 3, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255,0.4)";
-        ctx.fill();
-
-        // Number label (non-winner)
-        if (!isWinner) {
-          ctx.fillStyle = "rgba(255,255,255,0.8)";
-          ctx.font = "bold 8px sans-serif";
+        if (!isRevealing) {
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.font = "bold 7px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText(
-            ball.name.length > 3 ? ball.name.slice(0, 3) : ball.name,
-            x, y
-          );
+          ctx.fillText(ball.name.length > 3 ? ball.name.slice(0, 3) : ball.name, x, y);
+          ctx.textBaseline = "alphabetic";
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Draw winner ball (move to center + enlarge during reveal)
+      if (winBall) {
+        const { x: bx, y: by } = winBall.body.position;
+        const targetX = CENTER;
+        const targetY = CENTER;
+        const x = isRevealing ? bx + (targetX - bx) * t : bx;
+        const y = isRevealing ? by + (targetY - by) * t : by;
+        const scale = isRevealing ? 1 + t * 1.5 : 1;
+        const r = BALL_RADIUS * scale;
+
+        // Glow
+        if (isRevealing) {
+          ctx.beginPath();
+          ctx.arc(x, y, r + 8 * t, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.8})`;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
+        // Ball
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = winBall.color;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Shine
+        ctx.beginPath();
+        ctx.arc(x - r * 0.25, y - r * 0.25, r * 0.2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.fill();
+
+        // Name on ball
+        if (isRevealing && t > 0.3) {
+          ctx.globalAlpha = Math.min(1, (t - 0.3) * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = `bold ${Math.round(10 + t * 6)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          const name = winBall.name.length > 7 ? winBall.name.slice(0, 7) + "…" : winBall.name;
+          ctx.fillText(name, x, y);
+          ctx.textBaseline = "alphabetic";
+          ctx.globalAlpha = 1;
+        } else if (!isRevealing) {
+          ctx.fillStyle = "rgba(255,255,255,0.7)";
+          ctx.font = "bold 7px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(winBall.name.length > 3 ? winBall.name.slice(0, 3) : winBall.name, x, y);
           ctx.textBaseline = "alphabetic";
         }
       }
@@ -215,7 +253,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
 
     render();
     return () => cancelAnimationFrame(animId);
-  }, [phase, winner]);
+  }, [phase]);
 
   useEffect(() => {
     return () => {
@@ -228,13 +266,15 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     <div className="flex flex-col items-center gap-5">
       <div className="h-8 flex items-center justify-center">
         {phase === "done" ? (
-          <span className="text-lg font-bold text-primary">{winner}</span>
+          <span className="text-xl font-bold text-primary">{winner}</span>
+        ) : phase === "revealing" ? (
+          <span className="text-sm font-medium text-amber-500">당첨!</span>
         ) : phase === "idle" ? (
           <span className="text-sm text-muted">공을 섞어볼까?</span>
         ) : phase === "mixing" ? (
           <span className="text-sm font-medium text-muted">섞는 중...</span>
         ) : (
-          <span className="text-sm font-medium text-amber-500">선택 중...</span>
+          <span className="text-sm font-medium text-muted">멈추는 중...</span>
         )}
       </div>
 
