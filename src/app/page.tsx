@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
 import { useGeolocation } from "@/hooks/use-geolocation";
 import {
   getStoredLocation,
@@ -211,18 +212,23 @@ export default function Home() {
 
           <div className="flex flex-col items-center gap-3">
             <p className="text-sm font-medium text-muted">반경</p>
-            <div className="flex gap-2 rounded-full bg-surface-dim p-1">
+            <div className="flex gap-1 rounded-full bg-surface-dim p-1">
               {RADIUS_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
                   onClick={() => setRadius(opt.value)}
-                  className={`rounded-full px-5 py-2 text-sm font-medium transition-all ${
-                    radius === opt.value
-                      ? "bg-primary text-white shadow-sm"
-                      : "text-muted hover:text-foreground"
-                  }`}
+                  className="relative rounded-full px-5 py-2 text-sm font-medium transition-colors"
                 >
-                  {opt.label}
+                  {radius === opt.value && (
+                    <motion.span
+                      layoutId="radius-indicator"
+                      className="absolute inset-0 rounded-full bg-primary shadow-sm"
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                    />
+                  )}
+                  <span className={`relative z-10 ${radius === opt.value ? "text-white" : "text-muted hover:text-foreground"}`}>
+                    {opt.label}
+                  </span>
                 </button>
               ))}
             </div>
