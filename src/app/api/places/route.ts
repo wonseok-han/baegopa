@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const maxPages = 3;
+  const maxPages = 14;
   const allDocuments: {
     id: string;
     place_name: string;

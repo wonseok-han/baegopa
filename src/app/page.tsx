@@ -11,9 +11,9 @@ import {
 import type { Restaurant } from "@/types";
 
 const RADIUS_OPTIONS = [
+  { value: 300, label: "300m" },
   { value: 500, label: "500m" },
   { value: 1000, label: "1km" },
-  { value: 2000, label: "2km" },
 ];
 
 const KAKAO_SDK_URL = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${process.env.NEXT_PUBLIC_KAKAO_JS_KEY}&autoload=false`;
@@ -59,7 +59,7 @@ export default function Home() {
     if (!mapRef.current) {
       const map = new kakao.maps.Map(mapContainerRef.current, {
         center: position,
-        level: radius <= 500 ? 5 : radius <= 1000 ? 6 : 7,
+        level: radius <= 300 ? 4 : radius <= 500 ? 5 : 6,
       });
 
       new kakao.maps.Marker({
@@ -87,7 +87,7 @@ export default function Home() {
     circle.setMap(mapRef.current);
     circleRef.current = circle;
 
-    const level = radius <= 500 ? 5 : radius <= 1000 ? 6 : 7;
+    const level = radius <= 300 ? 4 : radius <= 500 ? 5 : 6;
     mapRef.current.setLevel(level);
     mapRef.current.setCenter(position);
   }, [mapReady, coordinates, radius]);
