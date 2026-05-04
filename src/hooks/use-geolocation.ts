@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { getStoredLocation } from "@/lib/storage";
 
 interface GeolocationState {
   coordinates: { lat: number; lng: number } | null;
@@ -9,10 +10,12 @@ interface GeolocationState {
 }
 
 export function useGeolocation() {
-  const [state, setState] = useState<GeolocationState>({
-    coordinates: null,
-    error: null,
-    loading: false,
+  const [state, setState] = useState<GeolocationState>(() => {
+    const stored = getStoredLocation();
+    if (stored) {
+      return { coordinates: { lat: stored.lat, lng: stored.lng }, error: null, loading: false };
+    }
+    return { coordinates: null, error: null, loading: false };
   });
 
   const requestPermission = useCallback(() => {
