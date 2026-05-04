@@ -2,6 +2,7 @@ import type { GameMeta } from "@/types";
 import { RouletteGame } from "@/components/games/roulette";
 import { SlotMachineGame } from "@/components/games/slot-machine";
 import { PinballGame } from "@/components/games/pinball";
+import { GachaGame } from "@/components/games/gacha";
 
 export const GAMES: GameMeta[] = [
   {
@@ -24,6 +25,13 @@ export const GAMES: GameMeta[] = [
     description: "공이 떨어질 곳은 어디?",
     icon: "pinball",
     component: PinballGame,
+  },
+  {
+    id: "gacha",
+    name: "뽑기",
+    description: "캡슐에서 뭐가 나올까?",
+    icon: "gacha",
+    component: GachaGame,
   },
 ];
 
