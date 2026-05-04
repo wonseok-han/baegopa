@@ -1,7 +1,7 @@
 import type { Restaurant } from "@/types";
 
 const LOCATION_KEY = "baegopa:location";
-const PLACES_KEY = "baegopa:places";
+const PLACES_PREFIX = "baegopa:places:";
 
 interface StoredLocation {
   lat: number;
@@ -13,7 +13,6 @@ interface StoredPlaces {
   restaurants: Restaurant[];
   lat: number;
   lng: number;
-  radius: number;
 }
 
 export function getStoredLocation(): StoredLocation | null {
@@ -40,10 +39,10 @@ export function getStoredPlaces(
   radius: number
 ): Restaurant[] | null {
   try {
-    const raw = sessionStorage.getItem(PLACES_KEY);
+    const raw = sessionStorage.getItem(`${PLACES_PREFIX}${radius}`);
     if (!raw) return null;
     const cached: StoredPlaces = JSON.parse(raw);
-    if (cached.lat === lat && cached.lng === lng && cached.radius === radius) {
+    if (cached.lat === lat && cached.lng === lng) {
       return cached.restaurants;
     }
   } catch {
@@ -60,8 +59,8 @@ export function setStoredPlaces(
 ) {
   try {
     sessionStorage.setItem(
-      PLACES_KEY,
-      JSON.stringify({ lat, lng, radius, restaurants })
+      `${PLACES_PREFIX}${radius}`,
+      JSON.stringify({ lat, lng, restaurants })
     );
   } catch {
     // ignore
@@ -71,7 +70,9 @@ export function setStoredPlaces(
 export function clearAllStorage() {
   try {
     sessionStorage.removeItem(LOCATION_KEY);
-    sessionStorage.removeItem(PLACES_KEY);
+    for (const radius of [100, 300, 500, 1000]) {
+      sessionStorage.removeItem(`${PLACES_PREFIX}${radius}`);
+    }
   } catch {
     // ignore
   }
