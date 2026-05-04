@@ -78,6 +78,35 @@ function PlayContent() {
     );
   }
 
+  if (!loading && restaurants.length < 2 && !error) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-5 p-8">
+        <div className="rounded-full bg-surface-dim p-4">
+          <svg viewBox="0 0 24 24" fill="none" className="h-8 w-8 text-muted">
+            <path
+              d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+        <div className="text-center">
+          <p className="font-medium">음식점이 부족해요</p>
+          <p className="mt-1 text-sm text-muted">
+            반경을 늘려서 다시 시도해보세요
+          </p>
+        </div>
+        <button
+          onClick={() => router.push("/")}
+          className="rounded-full bg-primary px-6 py-2.5 text-sm font-medium text-white transition-all hover:bg-primary-hover active:scale-95"
+        >
+          반경 재설정
+        </button>
+      </div>
+    );
+  }
+
   if (!selectedGame) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
