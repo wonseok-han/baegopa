@@ -6,6 +6,8 @@ import { useGeolocation } from "@/hooks/use-geolocation";
 import {
   getStoredLocation,
   setStoredLocation,
+  getStoredPlaces,
+  setStoredPlaces,
   clearAllStorage,
 } from "@/lib/storage";
 import type { Restaurant } from "@/types";
@@ -93,8 +95,31 @@ export default function Home() {
     mapRef.current.setCenter(position);
   }, [mapReady, coordinates, radius]);
 
+  const updateMarkers = useCallback(
+    (list: Restaurant[]) => {
+      if (!mapRef.current) return;
+      markersRef.current.forEach((m) => m.setMap(null));
+      markersRef.current = list.map((r) => {
+        const marker = new kakao.maps.Marker({
+          map: mapRef.current!,
+          position: new kakao.maps.LatLng(r.location.lat, r.location.lng),
+          title: r.name,
+        });
+        return marker;
+      });
+    },
+    []
+  );
+
   const fetchAndMarkRestaurants = useCallback(async () => {
     if (!coordinates) return;
+
+    const cached = getStoredPlaces(coordinates.lat, coordinates.lng, radius);
+    if (cached && cached.length > 0) {
+      setRestaurants(cached);
+      updateMarkers(cached);
+      return;
+    }
 
     try {
       const res = await fetch(
@@ -104,25 +129,13 @@ export default function Home() {
       if (res.ok && data.restaurants) {
         setRestaurants(data.restaurants);
         setStoredLocation(coordinates.lat, coordinates.lng, radius);
-
-        if (mapRef.current) {
-          markersRef.current.forEach((m) => m.setMap(null));
-          markersRef.current = [];
-
-          data.restaurants.forEach((r: Restaurant) => {
-            const marker = new kakao.maps.Marker({
-              map: mapRef.current!,
-              position: new kakao.maps.LatLng(r.location.lat, r.location.lng),
-              title: r.name,
-            });
-            markersRef.current.push(marker);
-          });
-        }
+        setStoredPlaces(coordinates.lat, coordinates.lng, radius, data.restaurants);
+        updateMarkers(data.restaurants);
       }
     } catch {
       // silently fail, user can proceed without markers
     }
-  }, [coordinates, radius]);
+  }, [coordinates, radius, updateMarkers]);
 
   useEffect(() => {
     if (mapReady && coordinates) {
