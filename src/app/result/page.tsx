@@ -2,6 +2,7 @@
 
 import { Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { getStoredLocation } from "@/lib/storage";
 
 function ResultContent() {
   const searchParams = useSearchParams();
@@ -12,11 +13,32 @@ function ResultContent() {
   const distance = searchParams.get("distance");
   const address = searchParams.get("address");
   const placeUrl = searchParams.get("placeUrl");
+  const gameId = searchParams.get("gameId");
 
   if (!name) {
     router.replace("/");
     return null;
   }
+
+  const handleRetry = () => {
+    const loc = getStoredLocation();
+    if (loc && gameId) {
+      router.push(
+        `/play?lat=${loc.lat}&lng=${loc.lng}&radius=${loc.radius}&gameId=${gameId}`
+      );
+    } else {
+      router.back();
+    }
+  };
+
+  const handleOtherGame = () => {
+    const loc = getStoredLocation();
+    if (loc) {
+      router.push(`/play?lat=${loc.lat}&lng=${loc.lng}&radius=${loc.radius}`);
+    } else {
+      router.push("/");
+    }
+  };
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
@@ -56,14 +78,20 @@ function ResultContent() {
           </a>
         )}
         <button
-          onClick={() => router.back()}
+          onClick={handleRetry}
           className="rounded-full bg-primary px-8 py-3.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-hover active:scale-95"
         >
           다시 고르기
         </button>
         <button
-          onClick={() => router.push("/")}
+          onClick={handleOtherGame}
           className="rounded-full border border-border px-8 py-3.5 text-sm font-medium transition-all hover:bg-surface-dim active:scale-95"
+        >
+          다른 게임하기
+        </button>
+        <button
+          onClick={() => router.push("/")}
+          className="text-sm text-muted transition-colors hover:text-foreground"
         >
           처음으로
         </button>

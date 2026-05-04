@@ -28,6 +28,21 @@ export function SlotIcon({ className = "w-8 h-8" }: { className?: string }) {
   );
 }
 
+export function PinballIcon({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" fill="none" className={className}>
+      <rect x="8" y="4" width="32" height="40" rx="4" stroke="currentColor" strokeWidth="3" />
+      <circle cx="16" cy="16" r="2.5" fill="currentColor" />
+      <circle cx="32" cy="16" r="2.5" fill="currentColor" />
+      <circle cx="24" cy="22" r="2.5" fill="currentColor" />
+      <circle cx="16" cy="28" r="2.5" fill="currentColor" />
+      <circle cx="32" cy="28" r="2.5" fill="currentColor" />
+      <circle cx="24" cy="12" r="4" fill="currentColor" opacity="0.4" />
+      <line x1="8" y1="36" x2="40" y2="36" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 export function DiceIcon({ className = "w-8 h-8" }: { className?: string }) {
   return (
     <svg viewBox="0 0 48 48" fill="none" className={className}>
@@ -44,6 +59,7 @@ export function DiceIcon({ className = "w-8 h-8" }: { className?: string }) {
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   roulette: RouletteIcon,
   slot: SlotIcon,
+  pinball: PinballIcon,
   dice: DiceIcon,
 };
 

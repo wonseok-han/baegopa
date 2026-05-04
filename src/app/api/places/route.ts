@@ -22,59 +22,69 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const params = new URLSearchParams({
-    category_group_code: "FD6",
-    x: lng,
-    y: lat,
-    radius,
-    size: "15",
-    sort: "distance",
-  });
+  const maxPages = 3;
+  const allDocuments: {
+    id: string;
+    place_name: string;
+    category_name: string;
+    road_address_name: string;
+    address_name: string;
+    distance: string;
+    x: string;
+    y: string;
+    place_url: string;
+  }[] = [];
 
-  const res = await fetch(
-    `https://dapi.kakao.com/v2/local/search/category.json?${params}`,
-    {
-      headers: {
-        Authorization: `KakaoAK ${KAKAO_REST_API_KEY}`,
-      },
-    }
-  );
+  for (let page = 1; page <= maxPages; page++) {
+    const params = new URLSearchParams({
+      category_group_code: "FD6",
+      x: lng,
+      y: lat,
+      radius,
+      size: "15",
+      sort: "distance",
+      page: String(page),
+    });
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    console.error("Kakao API error:", errorText);
-    return NextResponse.json(
-      { error: "음식점 검색에 실패했습니다" },
-      { status: 502 }
+    const res = await fetch(
+      `https://dapi.kakao.com/v2/local/search/category.json?${params}`,
+      {
+        headers: {
+          Authorization: `KakaoAK ${KAKAO_REST_API_KEY}`,
+        },
+      }
     );
+
+    if (!res.ok) {
+      if (page === 1) {
+        const errorText = await res.text();
+        console.error("Kakao API error:", errorText);
+        return NextResponse.json(
+          { error: "음식점 검색에 실패했습니다" },
+          { status: 502 }
+        );
+      }
+      break;
+    }
+
+    const data = await res.json();
+    allDocuments.push(...(data.documents || []));
+
+    if (data.meta?.is_end) break;
   }
 
-  const data = await res.json();
-
-  const restaurants = (data.documents || []).map(
-    (place: {
-      id: string;
-      place_name: string;
-      category_name: string;
-      road_address_name: string;
-      address_name: string;
-      distance: string;
-      x: string;
-      y: string;
-      place_url: string;
-    }) => ({
-      placeId: place.id,
-      name: place.place_name,
-      category: extractCategory(place.category_name),
-      distance: parseInt(place.distance) || 0,
-      address: place.road_address_name || place.address_name,
-      location: {
-        lat: parseFloat(place.y),
-        lng: parseFloat(place.x),
-      },
-      placeUrl: place.place_url,
-    })
-  );
+  const restaurants = allDocuments.map((place) => ({
+    placeId: place.id,
+    name: place.place_name,
+    category: extractCategory(place.category_name),
+    distance: parseInt(place.distance) || 0,
+    address: place.road_address_name || place.address_name,
+    location: {
+      lat: parseFloat(place.y),
+      lng: parseFloat(place.x),
+    },
+    placeUrl: place.place_url,
+  }));
 
   return NextResponse.json({ restaurants, total: restaurants.length });
 }

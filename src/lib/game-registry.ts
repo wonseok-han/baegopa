@@ -1,6 +1,7 @@
 import type { GameMeta } from "@/types";
 import { RouletteGame } from "@/components/games/roulette";
 import { SlotMachineGame } from "@/components/games/slot-machine";
+import { PinballGame } from "@/components/games/pinball";
 
 export const GAMES: GameMeta[] = [
   {
@@ -16,6 +17,13 @@ export const GAMES: GameMeta[] = [
     description: "잭팟 음식점은?",
     icon: "slot",
     component: SlotMachineGame,
+  },
+  {
+    id: "pinball",
+    name: "핀볼",
+    description: "공이 떨어질 곳은 어디?",
+    icon: "pinball",
+    component: PinballGame,
   },
 ];
 

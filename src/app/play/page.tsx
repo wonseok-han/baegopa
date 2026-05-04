@@ -11,11 +11,17 @@ function PlayContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { restaurants, loading, error, fetchPlaces } = useNearbyPlaces();
-  const [selectedGame, setSelectedGame] = useState<GameMeta | null>(null);
-
   const lat = searchParams.get("lat");
   const lng = searchParams.get("lng");
   const radius = searchParams.get("radius") || "1000";
+  const gameId = searchParams.get("gameId");
+
+  const [selectedGame, setSelectedGame] = useState<GameMeta | null>(() => {
+    if (gameId) {
+      return GAMES.find((g) => g.id === gameId) || null;
+    }
+    return null;
+  });
 
   useEffect(() => {
     if (lat && lng) {
@@ -32,10 +38,11 @@ function PlayContent() {
         distance: String(selected.distance),
         address: selected.address,
         ...(selected.placeUrl ? { placeUrl: selected.placeUrl } : {}),
+        ...(selectedGame ? { gameId: selectedGame.id } : {}),
       });
       router.push(`/result?${params.toString()}`);
     },
-    [router]
+    [router, selectedGame]
   );
 
   if (loading) {
@@ -62,7 +69,7 @@ function PlayContent() {
         </div>
         <p className="text-center text-muted">{error}</p>
         <button
-          onClick={() => router.back()}
+          onClick={() => router.push("/")}
           className="rounded-full bg-surface-dim px-6 py-2.5 text-sm font-medium transition-colors hover:bg-border"
         >
           돌아가기
@@ -113,6 +120,13 @@ function PlayContent() {
             </span>
           </button>
         </div>
+
+        <button
+          onClick={() => router.push("/")}
+          className="text-sm text-muted transition-colors hover:text-foreground"
+        >
+          처음으로
+        </button>
       </div>
     );
   }
