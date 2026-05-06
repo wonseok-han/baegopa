@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Bowl -->
+  <path d="M8 32 C8 32 10 52 32 52 C54 52 56 32 56 32 Z" fill="#FF8C00"/>
+  <ellipse cx="32" cy="32" rx="24" ry="6" fill="#FFA500"/>
+  <!-- Rice -->
+  <ellipse cx="32" cy="30" rx="20" ry="8" fill="#FFFFFF"/>
+  <circle cx="24" cy="28" r="3" fill="#F5F5F5"/>
+  <circle cx="32" cy="26" r="3" fill="#F5F5F5"/>
+  <circle cx="40" cy="28" r="3" fill="#F5F5F5"/>
+  <!-- Steam -->
+  <path d="M22 18 Q24 14 22 10" stroke="#999" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
+  <path d="M32 16 Q34 12 32 8" stroke="#999" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
+  <path d="M42 18 Q44 14 42 10" stroke="#999" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
+</svg>
