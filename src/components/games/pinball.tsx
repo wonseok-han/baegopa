@@ -44,7 +44,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     if (!canvasRef.current) return;
 
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1.2, scale: 0.001 },
+      gravity: { x: 0, y: 1, scale: 0.001 },
+      positionIterations: 12,
+      velocityIterations: 8,
     });
     engineRef.current = engine;
 
@@ -82,7 +84,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const ww = WIDTH - gapW;
       const wx = fromLeft ? ww / 2 : WIDTH - ww / 2;
       Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(wx, zy, ww, 6, {
+        Matter.Bodies.rectangle(wx, zy, ww, 14, {
           isStatic: true, label: "zigzag",
           angle: fromLeft ? 0.18 : -0.18,
           friction: 0, frictionStatic: 0, restitution: 0.3,
@@ -140,7 +142,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const ww = WIDTH - gapW;
       const wx = fromLeft ? ww / 2 : WIDTH - ww / 2;
       Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(wx, zy, ww, 6, {
+        Matter.Bodies.rectangle(wx, zy, ww, 14, {
           isStatic: true, label: "zigzag",
           angle: fromLeft ? 0.22 : -0.22,
           friction: 0, frictionStatic: 0, restitution: 0.3,
@@ -197,14 +199,14 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const inset = 15 + i * 20;
       const wallLen = inset + 30;
       Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(inset / 2 + 15, fy, wallLen, 6, {
+        Matter.Bodies.rectangle(inset / 2 + 15, fy, wallLen, 14, {
           isStatic: true, label: "funnel",
           angle: 0.3 + i * 0.05,
           friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
       Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(WIDTH - inset / 2 - 15, fy, wallLen, 6, {
+        Matter.Bodies.rectangle(WIDTH - inset / 2 - 15, fy, wallLen, 14, {
           isStatic: true, label: "funnel",
           angle: -(0.3 + i * 0.05),
           friction: 0, frictionStatic: 0, restitution: 0.3,
