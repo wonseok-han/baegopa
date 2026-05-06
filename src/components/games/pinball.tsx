@@ -78,7 +78,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
     // ═══ Section 2: Zigzag S-curves ═══
     for (let i = 0; i < 4; i++) {
-      const zy = y + i * 90;
+      const zy = y + i * 130;
       const fromLeft = i % 2 === 0;
       const gapW = 55;
       const ww = WIDTH - gapW;
@@ -91,7 +91,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         })
       );
     }
-    y += 400;
+    y += 560;
 
     // ═══ Section 3: Diamond obstacles ═══
     const diamonds = [
@@ -136,7 +136,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
     // ═══ Section 5: Tighter zigzag ═══
     for (let i = 0; i < 3; i++) {
-      const zy = y + i * 100;
+      const zy = y + i * 140;
       const fromLeft = i % 2 === 0;
       const gapW = 45;
       const ww = WIDTH - gapW;
@@ -149,7 +149,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         })
       );
     }
-    y += 340;
+    y += 460;
 
     // ═══ Section 6: Dense peg field ═══
     for (let row = 0; row < 8; row++) {
@@ -411,6 +411,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         if (sY < -30 || sY > CANVAS_HEIGHT + 30) continue;
 
         const isWin = winner === ball.name;
+        const angle = ball.body.angle;
 
         // Ball glow
         ctx.shadowColor = ball.color;
@@ -424,21 +425,54 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         ctx.lineWidth = isWin ? 2 : 0.8;
         ctx.stroke();
 
-        // Shine highlight
+        // Rolling stripe (shows rotation)
+        ctx.save();
         ctx.beginPath();
-        ctx.arc(x - 3, sY - 3, 2, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255,0.45)";
+        ctx.arc(x, sY, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.lineWidth = 1.5;
+        const stripeOffset = BALL_RADIUS * 0.6;
+        ctx.beginPath();
+        ctx.moveTo(
+          x + Math.cos(angle) * -BALL_RADIUS * 1.2,
+          sY + Math.sin(angle) * -BALL_RADIUS * 1.2
+        );
+        ctx.lineTo(
+          x + Math.cos(angle) * BALL_RADIUS * 1.2,
+          sY + Math.sin(angle) * BALL_RADIUS * 1.2
+        );
+        ctx.moveTo(
+          x + Math.cos(angle + Math.PI / 2) * stripeOffset + Math.cos(angle) * -BALL_RADIUS,
+          sY + Math.sin(angle + Math.PI / 2) * stripeOffset + Math.sin(angle) * -BALL_RADIUS
+        );
+        ctx.lineTo(
+          x + Math.cos(angle + Math.PI / 2) * stripeOffset + Math.cos(angle) * BALL_RADIUS,
+          sY + Math.sin(angle + Math.PI / 2) * stripeOffset + Math.sin(angle) * BALL_RADIUS
+        );
+        ctx.stroke();
+        ctx.restore();
+
+        // Shine highlight (rotates with ball)
+        const shineX = x + Math.cos(angle - 2.3) * BALL_RADIUS * 0.45;
+        const shineY = sY + Math.sin(angle - 2.3) * BALL_RADIUS * 0.45;
+        ctx.beginPath();
+        ctx.arc(shineX, shineY, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
         ctx.fill();
 
-        // Restaurant name
+        // Restaurant name (rotates with ball)
+        ctx.save();
+        ctx.translate(x, sY);
+        ctx.rotate(angle);
         ctx.fillStyle = "rgba(255,255,255,0.9)";
         ctx.font = "bold 7px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(ball.name.length > 4 ? ball.name.slice(0, 4) : ball.name, x, sY);
-        ctx.textBaseline = "alphabetic";
+        ctx.fillText(ball.name.length > 4 ? ball.name.slice(0, 4) : ball.name, 0, 0);
+        ctx.restore();
 
-        // Winner highlight ring + name above
+        // Winner highlight ring + name above (no rotation)
         if (isWin) {
           ctx.shadowColor = "#fbbf24";
           ctx.shadowBlur = 12;
