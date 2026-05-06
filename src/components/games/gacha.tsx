@@ -88,11 +88,9 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     Matter.Runner.run(runner, engine);
 
     // Lottery machine air jets - strong upward blast + chaotic turbulence
-    let jetTimer = 0;
     let jetAngle = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
       if (winnerRef.current) return;
-      jetTimer++;
 
       // Rotate the main jet nozzle position around the bottom
       jetAngle += 0.06;
