@@ -74,7 +74,3 @@ src/
 ├── hooks/                    # useGeolocation 등
 └── lib/                      # 유틸리티, 게임 레지스트리
 ```
-
-## License
-
-MIT
