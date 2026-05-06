@@ -28,6 +28,21 @@ export function SlotIcon({ className = "w-8 h-8" }: { className?: string }) {
   );
 }
 
+export function PinballIcon({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" fill="none" className={className}>
+      <rect x="8" y="4" width="32" height="40" rx="4" stroke="currentColor" strokeWidth="3" />
+      <circle cx="16" cy="16" r="2.5" fill="currentColor" />
+      <circle cx="32" cy="16" r="2.5" fill="currentColor" />
+      <circle cx="24" cy="22" r="2.5" fill="currentColor" />
+      <circle cx="16" cy="28" r="2.5" fill="currentColor" />
+      <circle cx="32" cy="28" r="2.5" fill="currentColor" />
+      <circle cx="24" cy="12" r="4" fill="currentColor" opacity="0.4" />
+      <line x1="8" y1="36" x2="40" y2="36" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 export function DiceIcon({ className = "w-8 h-8" }: { className?: string }) {
   return (
     <svg viewBox="0 0 48 48" fill="none" className={className}>
@@ -41,9 +56,25 @@ export function DiceIcon({ className = "w-8 h-8" }: { className?: string }) {
   );
 }
 
+export function GachaIcon({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" fill="none" className={className}>
+      <circle cx="24" cy="20" r="14" stroke="currentColor" strokeWidth="3" />
+      <path d="M14 32 L14 40 Q14 44 18 44 L30 44 Q34 44 34 40 L34 32" stroke="currentColor" strokeWidth="3" fill="none" />
+      <circle cx="20" cy="16" r="3" fill="currentColor" opacity="0.3" />
+      <circle cx="28" cy="14" r="2.5" fill="currentColor" opacity="0.3" />
+      <circle cx="22" cy="22" r="2" fill="currentColor" opacity="0.3" />
+      <circle cx="30" cy="20" r="2.5" fill="currentColor" opacity="0.3" />
+      <rect x="18" y="32" width="12" height="4" rx="2" fill="currentColor" opacity="0.2" />
+    </svg>
+  );
+}
+
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   roulette: RouletteIcon,
   slot: SlotIcon,
+  pinball: PinballIcon,
+  gacha: GachaIcon,
   dice: DiceIcon,
 };
 

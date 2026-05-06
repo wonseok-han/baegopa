@@ -2,6 +2,67 @@ import { NextRequest, NextResponse } from "next/server";
 
 const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY;
 
+interface KakaoPlace {
+  id: string;
+  place_name: string;
+  category_name: string;
+  road_address_name: string;
+  address_name: string;
+  distance: string;
+  x: string;
+  y: string;
+  place_url: string;
+}
+
+async function fetchPages(centerLng: string, centerLat: string, radius: string) {
+  const documents: KakaoPlace[] = [];
+
+  for (let page = 1; page <= 3; page++) {
+    const params = new URLSearchParams({
+      category_group_code: "FD6",
+      x: centerLng,
+      y: centerLat,
+      radius,
+      size: "15",
+      sort: "distance",
+      page: String(page),
+    });
+
+    const res = await fetch(
+      `https://dapi.kakao.com/v2/local/search/category.json?${params}`,
+      {
+        headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` },
+      }
+    );
+
+    if (!res.ok) break;
+
+    const data = await res.json();
+    documents.push(...(data.documents || []));
+    if (data.meta?.is_end) break;
+  }
+
+  return documents;
+}
+
+function getGridPoints(lat: number, lng: number, radiusM: number) {
+  const offset = radiusM * 0.5;
+  const latOffset = offset / 111320;
+  const lngOffset = offset / (111320 * Math.cos((lat * Math.PI) / 180));
+
+  return [
+    { lat, lng },
+    { lat: lat + latOffset, lng },
+    { lat: lat - latOffset, lng },
+    { lat, lng: lng + lngOffset },
+    { lat, lng: lng - lngOffset },
+    { lat: lat + latOffset, lng: lng + lngOffset },
+    { lat: lat + latOffset, lng: lng - lngOffset },
+    { lat: lat - latOffset, lng: lng + lngOffset },
+    { lat: lat - latOffset, lng: lng - lngOffset },
+  ];
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const lat = searchParams.get("lat");
@@ -22,59 +83,48 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const params = new URLSearchParams({
-    category_group_code: "FD6",
-    x: lng,
-    y: lat,
-    radius,
-    size: "15",
-    sort: "distance",
-  });
+  const centerLat = parseFloat(lat);
+  const centerLng = parseFloat(lng);
+  const radiusM = parseInt(radius);
 
-  const res = await fetch(
-    `https://dapi.kakao.com/v2/local/search/category.json?${params}`,
-    {
-      headers: {
-        Authorization: `KakaoAK ${KAKAO_REST_API_KEY}`,
-      },
-    }
+  const gridPoints = getGridPoints(centerLat, centerLng, radiusM);
+  const subRadius = String(Math.ceil(radiusM * 0.6));
+
+  const results = await Promise.all(
+    gridPoints.map((point) =>
+      fetchPages(String(point.lng), String(point.lat), subRadius)
+    )
   );
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    console.error("Kakao API error:", errorText);
-    return NextResponse.json(
-      { error: "음식점 검색에 실패했습니다" },
-      { status: 502 }
-    );
+  const seen = new Set<string>();
+  const allDocuments: KakaoPlace[] = [];
+
+  for (const docs of results) {
+    for (const doc of docs) {
+      if (!seen.has(doc.id)) {
+        seen.add(doc.id);
+        allDocuments.push(doc);
+      }
+    }
   }
 
-  const data = await res.json();
-
-  const restaurants = (data.documents || []).map(
-    (place: {
-      id: string;
-      place_name: string;
-      category_name: string;
-      road_address_name: string;
-      address_name: string;
-      distance: string;
-      x: string;
-      y: string;
-      place_url: string;
-    }) => ({
-      placeId: place.id,
-      name: place.place_name,
-      category: extractCategory(place.category_name),
-      distance: parseInt(place.distance) || 0,
-      address: place.road_address_name || place.address_name,
-      location: {
-        lat: parseFloat(place.y),
-        lng: parseFloat(place.x),
-      },
-      placeUrl: place.place_url,
+  const restaurants = allDocuments
+    .map((place) => {
+      const placeLat = parseFloat(place.y);
+      const placeLng = parseFloat(place.x);
+      const dist = haversine(centerLat, centerLng, placeLat, placeLng);
+      return {
+        placeId: place.id,
+        name: place.place_name,
+        category: extractCategory(place.category_name),
+        distance: Math.round(dist),
+        address: place.road_address_name || place.address_name,
+        location: { lat: placeLat, lng: placeLng },
+        placeUrl: place.place_url,
+      };
     })
-  );
+    .filter((r) => r.distance <= radiusM)
+    .sort((a, b) => a.distance - b.distance);
 
   return NextResponse.json({ restaurants, total: restaurants.length });
 }
@@ -82,4 +132,16 @@ export async function GET(request: NextRequest) {
 function extractCategory(categoryName: string): string {
   const parts = categoryName.split(" > ");
   return parts[parts.length - 1] || "음식점";
+}
+
+function haversine(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
