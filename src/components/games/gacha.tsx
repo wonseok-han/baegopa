@@ -76,7 +76,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
       const x = CENTER + Math.cos(angle) * dist;
       const y = CENTER + Math.sin(angle) * dist;
       const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.8, friction: 0, frictionAir: 0.01, density: 0.0005, label: `ball-${i}`,
+        restitution: 0.95, friction: 0, frictionStatic: 0, frictionAir: 0.005, density: 0.0003, label: `ball-${i}`,
       });
       balls.push({ name: selected[i].name, color: COLORS[i % COLORS.length], body });
       Matter.Composite.add(engine.world, body);
@@ -87,37 +87,46 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
 
-    // Air blast mixing - random force on each ball individually
-    let windAngle = Math.random() * Math.PI * 2;
-    let windTimer = 0;
+    // Lottery machine air jets - strong upward blast + chaotic turbulence
+    let jetTimer = 0;
+    let jetAngle = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
       if (winnerRef.current) return;
-      windTimer++;
+      jetTimer++;
 
-      // Global wind direction shifts
-      if (windTimer % 20 === 0) {
-        windAngle += (Math.random() - 0.5) * 2.5;
-      }
+      // Rotate the main jet nozzle position around the bottom
+      jetAngle += 0.06;
+      // Jet origin moves along the bottom arc of the circle
+      const jetX = CENTER + Math.cos(jetAngle) * RADIUS * 0.5;
+      const jetY = CENTER + Math.sin(jetAngle) * RADIUS * 0.5;
 
       for (const ball of balls) {
-        // Per-ball random turbulence
-        const turbX = (Math.random() - 0.5) * 0.0006;
-        const turbY = (Math.random() - 0.5) * 0.0006;
-        // Wind push
-        const windForce = 0.00025 + Math.random() * 0.00015;
-        const fx = Math.cos(windAngle) * windForce + turbX;
-        const fy = Math.sin(windAngle) * windForce + turbY;
-        Matter.Body.applyForce(ball.body, ball.body.position, { x: fx, y: fy });
-
-        // Keep balls inside by pushing toward center if too far
-        const dx = ball.body.position.x - CENTER;
-        const dy = ball.body.position.y - CENTER;
+        const dx = ball.body.position.x - jetX;
+        const dy = ball.body.position.y - jetY;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > RADIUS * 0.75) {
+
+        // Air blast: push balls away from jet origin (closer = stronger)
+        if (dist < RADIUS * 1.2 && dist > 1) {
+          const force = 0.0008 / (1 + dist * 0.02);
           Matter.Body.applyForce(ball.body, ball.body.position, {
-            x: -dx * 0.00003,
-            y: -dy * 0.00003,
+            x: (dx / dist) * force,
+            y: (dy / dist) * force,
           });
+        }
+
+        // Random turbulence on every ball every tick
+        Matter.Body.applyForce(ball.body, ball.body.position, {
+          x: (Math.random() - 0.5) * 0.0004,
+          y: (Math.random() - 0.5) * 0.0004,
+        });
+
+        // Speed cap so balls don't go insane
+        const vx = ball.body.velocity.x;
+        const vy = ball.body.velocity.y;
+        const speed = Math.sqrt(vx * vx + vy * vy);
+        if (speed > 8) {
+          const scale = 8 / speed;
+          Matter.Body.setVelocity(ball.body, { x: vx * scale, y: vy * scale });
         }
       }
     });
