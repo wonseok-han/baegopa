@@ -200,26 +200,39 @@ export function GachaGame({ candidates, onResult }: GameProps) {
         const targetY = CENTER;
         const x = isRevealing ? bx + (targetX - bx) * t : bx;
         const y = isRevealing ? by + (targetY - by) * t : by;
-        const scale = isRevealing ? 1 + t * 1.5 : 1;
+        const scale = isRevealing ? 1 + t * 3 : 1;
         const r = BALL_RADIUS * scale;
 
-        // Glow
+        // Outer glow rings
         if (isRevealing) {
+          ctx.shadowColor = "#fbbf24";
+          ctx.shadowBlur = 20 * t;
           ctx.beginPath();
-          ctx.arc(x, y, r + 8 * t, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.8})`;
+          ctx.arc(x, y, r + 12 * t, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.6})`;
           ctx.lineWidth = 3;
           ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(x, y, r + 22 * t, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.3})`;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
         }
 
         // Ball
+        if (isRevealing) {
+          ctx.shadowColor = winBall.color;
+          ctx.shadowBlur = 15 * t;
+        }
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fillStyle = winBall.color;
         ctx.fill();
-        ctx.strokeStyle = "rgba(255,255,255,0.4)";
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = isRevealing ? `rgba(255,255,255,${0.4 + t * 0.4})` : "rgba(255,255,255,0.4)";
+        ctx.lineWidth = isRevealing ? 2 + t : 1.5;
         ctx.stroke();
+        ctx.shadowBlur = 0;
 
         // Shine
         ctx.beginPath();
@@ -231,7 +244,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
         if (isRevealing && t > 0.3) {
           ctx.globalAlpha = Math.min(1, (t - 0.3) * 2);
           ctx.fillStyle = "#ffffff";
-          ctx.font = `bold ${Math.round(10 + t * 6)}px sans-serif`;
+          ctx.font = `bold ${Math.round(12 + t * 14)}px sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           const name = winBall.name.length > 7 ? winBall.name.slice(0, 7) + "…" : winBall.name;
