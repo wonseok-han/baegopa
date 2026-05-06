@@ -32,7 +32,6 @@ export function GachaGame({ candidates, onResult }: GameProps) {
   const [winner, setWinner] = useState("");
   const winnerRef = useRef<BallData | null>(null);
   const revealProgressRef = useRef(0);
-  const mixAngleRef = useRef(0);
 
   const maxBalls = Math.min(candidates.length, 20);
 
