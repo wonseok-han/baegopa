@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useGeolocation } from "@/hooks/use-geolocation";
 import {
   getStoredLocation,
@@ -24,12 +24,22 @@ const KAKAO_SDK_URL = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${process.env.NEXT
 
 export default function Home() {
   const router = useRouter();
-  const { coordinates, error, loading, requestPermission, reset: resetGeolocation } = useGeolocation();
+  const { coordinates, error, loading, requestPermission, reset: resetGeolocation, setManualCoordinates } = useGeolocation();
   const [radius, setRadius] = useState(() => {
     const stored = getStoredLocation();
     return stored ? stored.radius : 100;
   });
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ name: string; address: string; lat: number; lng: number }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchPage, setSearchPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchListRef = useRef<HTMLUListElement>(null);
+  const currentQueryRef = useRef("");
   const [mapReady, setMapReady] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<kakao.maps.Map | null>(null);
@@ -163,7 +173,64 @@ export default function Home() {
     setRestaurants([]);
     setMapReady(false);
     setRadius(100);
+    setSearchQuery("");
+    setSearchResults([]);
+    setHasMore(false);
+    setSearchPage(1);
+    setShowSearch(false);
     resetGeolocation();
+  };
+
+  const fetchSearchResults = useCallback(async (query: string, page: number, append: boolean) => {
+    if (append) setLoadingMore(true); else setSearching(true);
+    try {
+      const res = await fetch(`/api/search?query=${encodeURIComponent(query)}&page=${page}`);
+      const data = await res.json();
+      if (res.ok && data.results) {
+        setSearchResults((prev) => append ? [...prev, ...data.results] : data.results);
+        setHasMore(data.hasMore ?? false);
+        setSearchPage(page);
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setSearching(false);
+      setLoadingMore(false);
+    }
+  }, []);
+
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (value.trim().length < 2) {
+      setSearchResults([]);
+      setHasMore(false);
+      return;
+    }
+    currentQueryRef.current = value.trim();
+    searchTimerRef.current = setTimeout(() => {
+      fetchSearchResults(value.trim(), 1, false);
+    }, 300);
+  };
+
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+    fetchSearchResults(currentQueryRef.current, searchPage + 1, true);
+  };
+
+  const handleSearchScroll = () => {
+    const el = searchListRef.current;
+    if (!el || loadingMore || !hasMore) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 10) {
+      handleLoadMore();
+    }
+  };
+
+  const handleSelectPlace = (place: { name: string; address: string; lat: number; lng: number }) => {
+    setManualCoordinates(place.lat, place.lng);
+    setSearchQuery("");
+    setSearchResults([]);
+    setShowSearch(false);
   };
 
   return (
@@ -176,13 +243,143 @@ export default function Home() {
       </div>
 
       {!coordinates && (
-        <button
-          onClick={requestPermission}
-          disabled={loading}
-          className="rounded-full bg-primary px-8 py-4 text-lg font-semibold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50"
-        >
-          {loading ? "위치 찾는 중..." : "내 위치 찾기"}
-        </button>
+        <div className="flex w-full max-w-sm flex-col items-center gap-5">
+          <div className="flex w-full gap-1 rounded-full bg-surface-dim p-1">
+            <button
+              onClick={() => setShowSearch(false)}
+              className="relative flex-1 rounded-full py-2.5 text-sm font-medium transition-colors"
+            >
+              {!showSearch && (
+                <motion.span
+                  layoutId="location-tab"
+                  className="absolute inset-0 rounded-full bg-primary shadow-sm"
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                />
+              )}
+              <span className={`relative z-10 ${!showSearch ? "text-white" : "text-muted"}`}>
+                내 위치
+              </span>
+            </button>
+            <button
+              onClick={() => setShowSearch(true)}
+              className="relative flex-1 rounded-full py-2.5 text-sm font-medium transition-colors"
+            >
+              {showSearch && (
+                <motion.span
+                  layoutId="location-tab"
+                  className="absolute inset-0 rounded-full bg-primary shadow-sm"
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                />
+              )}
+              <span className={`relative z-10 ${showSearch ? "text-white" : "text-muted"}`}>
+                장소 검색
+              </span>
+            </button>
+          </div>
+
+          <AnimatePresence mode="wait">
+            {!showSearch ? (
+              <motion.div
+                key="gps"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="flex w-full flex-col items-center gap-3"
+              >
+                <p className="text-sm text-muted">GPS로 현재 위치를 찾아요</p>
+                <button
+                  onClick={requestPermission}
+                  disabled={loading}
+                  className="w-full rounded-full bg-primary px-8 py-4 text-lg font-semibold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50"
+                >
+                  {loading ? "위치 찾는 중..." : "내 위치 찾기"}
+                </button>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="search"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="relative w-full"
+              >
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => handleSearchInput(e.target.value)}
+                    placeholder="강남역, 홍대입구, 서울시 마포구..."
+                    className="w-full rounded-2xl border border-border bg-surface px-4 py-3.5 pr-10 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    autoFocus
+                  />
+                  {searching && (
+                    <div className="absolute right-3 top-3.5">
+                      <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                        className="h-4 w-4 rounded-full border-2 border-muted border-t-primary"
+                      />
+                    </div>
+                  )}
+                </div>
+                <AnimatePresence>
+                  {searchResults.length > 0 && (
+                    <motion.ul
+                      ref={searchListRef}
+                      onScroll={handleSearchScroll}
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute z-10 mt-2 max-h-64 w-full overflow-y-auto overscroll-contain rounded-2xl border border-border bg-surface shadow-xl"
+                    >
+                      {searchResults.map((place, i) => (
+                        <motion.li
+                          key={`${place.lat}-${place.lng}-${i}`}
+                          initial={{ opacity: 0, x: -8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: Math.min(i, 9) * 0.05 }}
+                        >
+                          <button
+                            onClick={() => handleSelectPlace(place)}
+                            className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-dim"
+                          >
+                            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">
+                              {i + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-foreground">{place.name}</p>
+                              <p className="truncate text-xs text-muted">{place.address}</p>
+                            </div>
+                          </button>
+                        </motion.li>
+                      ))}
+                      {loadingMore && (
+                        <li className="flex justify-center py-3">
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="h-5 w-5 rounded-full border-2 border-muted border-t-primary"
+                          />
+                        </li>
+                      )}
+                      {!hasMore && searchResults.length >= 15 && (
+                        <li className="py-2 text-center text-xs text-muted">
+                          모든 결과를 불러왔어요
+                        </li>
+                      )}
+                    </motion.ul>
+                  )}
+                </AnimatePresence>
+                {searchQuery.length > 0 && searchQuery.length < 2 && (
+                  <p className="mt-2 text-center text-xs text-muted">2글자 이상 입력해주세요</p>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       )}
 
       {error && <p className="text-sm text-red-500">{error}</p>}
