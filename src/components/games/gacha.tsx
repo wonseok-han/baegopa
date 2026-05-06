@@ -88,13 +88,31 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
 
-    // Rotating gravity for mixing
+    // Chaotic gravity for mixing - direction and speed change unpredictably
     mixAngleRef.current = 0;
+    let mixSpeed = 0.08;
+    let mixIntensity = 0.002;
+    let shakeTimer = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
       if (winnerRef.current) return;
-      mixAngleRef.current += 0.08;
-      engine.gravity.x = Math.cos(mixAngleRef.current) * 0.002;
-      engine.gravity.y = Math.sin(mixAngleRef.current) * 0.002;
+      shakeTimer++;
+      // Change rotation speed and direction randomly
+      if (shakeTimer % 30 === 0) {
+        mixSpeed = (0.05 + Math.random() * 0.12) * (Math.random() > 0.4 ? 1 : -1);
+        mixIntensity = 0.0015 + Math.random() * 0.002;
+      }
+      // Occasional strong shake
+      if (shakeTimer % 50 === 0) {
+        for (const ball of balls) {
+          Matter.Body.applyForce(ball.body, ball.body.position, {
+            x: (Math.random() - 0.5) * 0.0015,
+            y: (Math.random() - 0.5) * 0.0015,
+          });
+        }
+      }
+      mixAngleRef.current += mixSpeed;
+      engine.gravity.x = Math.cos(mixAngleRef.current) * mixIntensity;
+      engine.gravity.y = Math.sin(mixAngleRef.current) * mixIntensity;
       engine.gravity.scale = 1;
     });
 
@@ -200,39 +218,26 @@ export function GachaGame({ candidates, onResult }: GameProps) {
         const targetY = CENTER;
         const x = isRevealing ? bx + (targetX - bx) * t : bx;
         const y = isRevealing ? by + (targetY - by) * t : by;
-        const scale = isRevealing ? 1 + t * 3 : 1;
+        const scale = isRevealing ? 1 + t * 2 : 1;
         const r = BALL_RADIUS * scale;
 
-        // Outer glow rings
+        // Single glow ring
         if (isRevealing) {
-          ctx.shadowColor = "#fbbf24";
-          ctx.shadowBlur = 20 * t;
           ctx.beginPath();
-          ctx.arc(x, y, r + 12 * t, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.6})`;
-          ctx.lineWidth = 3;
+          ctx.arc(x, y, r + 6 * t, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.7})`;
+          ctx.lineWidth = 2.5;
           ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(x, y, r + 22 * t, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(251, 191, 36, ${t * 0.3})`;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
         }
 
         // Ball
-        if (isRevealing) {
-          ctx.shadowColor = winBall.color;
-          ctx.shadowBlur = 15 * t;
-        }
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fillStyle = winBall.color;
         ctx.fill();
-        ctx.strokeStyle = isRevealing ? `rgba(255,255,255,${0.4 + t * 0.4})` : "rgba(255,255,255,0.4)";
-        ctx.lineWidth = isRevealing ? 2 + t : 1.5;
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 1.5;
         ctx.stroke();
-        ctx.shadowBlur = 0;
 
         // Shine
         ctx.beginPath();
@@ -244,7 +249,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
         if (isRevealing && t > 0.3) {
           ctx.globalAlpha = Math.min(1, (t - 0.3) * 2);
           ctx.fillStyle = "#ffffff";
-          ctx.font = `bold ${Math.round(12 + t * 14)}px sans-serif`;
+          ctx.font = `bold ${Math.round(10 + t * 8)}px sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           const name = winBall.name.length > 7 ? winBall.name.slice(0, 7) + "…" : winBall.name;
