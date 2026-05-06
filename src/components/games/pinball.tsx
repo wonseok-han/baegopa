@@ -44,7 +44,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     if (!canvasRef.current) return;
 
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 0.6, scale: 0.001 },
+      gravity: { x: 0, y: 1.2, scale: 0.001 },
     });
     engineRef.current = engine;
 
@@ -85,7 +85,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         Matter.Bodies.rectangle(wx, zy, ww, 6, {
           isStatic: true, label: "zigzag",
           angle: fromLeft ? 0.18 : -0.18,
-          friction: 0.01, restitution: 0.3,
+          friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
     }
@@ -143,7 +143,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         Matter.Bodies.rectangle(wx, zy, ww, 6, {
           isStatic: true, label: "zigzag",
           angle: fromLeft ? 0.22 : -0.22,
-          friction: 0.01, restitution: 0.3,
+          friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
     }
@@ -200,14 +200,14 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         Matter.Bodies.rectangle(inset / 2 + 15, fy, wallLen, 6, {
           isStatic: true, label: "funnel",
           angle: 0.28 + i * 0.04,
-          friction: 0.01, restitution: 0.3,
+          friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(WIDTH - inset / 2 - 15, fy, wallLen, 6, {
           isStatic: true, label: "funnel",
           angle: -(0.28 + i * 0.04),
-          friction: 0.01, restitution: 0.3,
+          friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
     }
@@ -230,7 +230,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const bx = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 6;
       const by = 20 + row * (BALL_RADIUS * 2.5);
       const body = Matter.Bodies.circle(bx, by, BALL_RADIUS, {
-        restitution: 0.5, friction: 0.02, density: 0.001,
+        restitution: 0.6, friction: 0.005, frictionStatic: 0, density: 0.001,
         label: `ball-${i}`,
       });
       balls.push({
@@ -243,18 +243,18 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     }
     ballsRef.current = balls;
 
-    // Anti-stuck nudge
+    // Anti-stuck nudge - frequent and aggressive
     let tick = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
       tick++;
-      if (tick % 150 !== 0) return;
+      if (tick % 60 !== 0) return;
       for (const ball of balls) {
         if (ball.finished) continue;
         const spd = Math.sqrt(ball.body.velocity.x ** 2 + ball.body.velocity.y ** 2);
-        if (spd < 0.2) {
+        if (spd < 0.5) {
           Matter.Body.applyForce(ball.body, ball.body.position, {
-            x: (Math.random() - 0.5) * 0.0004,
-            y: 0.0003,
+            x: (Math.random() - 0.5) * 0.001,
+            y: 0.0008,
           });
         }
       }
