@@ -28,6 +28,10 @@ export function useGeolocation() {
     setState({ coordinates: null, error: null, loading: false });
   }, []);
 
+  const setManualCoordinates = useCallback((lat: number, lng: number) => {
+    setState({ coordinates: { lat, lng }, error: null, loading: false });
+  }, []);
+
   const requestPermission = useCallback(() => {
     if (!navigator.geolocation) {
       setState((prev) => ({
@@ -61,5 +65,5 @@ export function useGeolocation() {
     );
   }, []);
 
-  return { ...state, requestPermission, reset };
+  return { ...state, requestPermission, reset, setManualCoordinates };
 }
