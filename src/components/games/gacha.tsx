@@ -87,44 +87,31 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
 
-    // Lottery machine air jets - strong upward blast + chaotic turbulence
-    let jetAngle = 0;
+    // Lottery machine: random velocity kicks per ball (not shared forces)
     Matter.Events.on(engine, "beforeUpdate", () => {
       if (winnerRef.current) return;
 
-      // Rotate the main jet nozzle position around the bottom
-      jetAngle += 0.06;
-      // Jet origin moves along the bottom arc of the circle
-      const jetX = CENTER + Math.cos(jetAngle) * RADIUS * 0.5;
-      const jetY = CENTER + Math.sin(jetAngle) * RADIUS * 0.5;
-
       for (const ball of balls) {
-        const dx = ball.body.position.x - jetX;
-        const dy = ball.body.position.y - jetY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        // Air blast: push balls away from jet origin (closer = stronger)
-        if (dist < RADIUS * 1.2 && dist > 1) {
-          const force = 0.0008 / (1 + dist * 0.02);
-          Matter.Body.applyForce(ball.body, ball.body.position, {
-            x: (dx / dist) * force,
-            y: (dy / dist) * force,
-          });
-        }
-
-        // Random turbulence on every ball every tick
-        Matter.Body.applyForce(ball.body, ball.body.position, {
-          x: (Math.random() - 0.5) * 0.0004,
-          y: (Math.random() - 0.5) * 0.0004,
-        });
-
-        // Speed cap so balls don't go insane
         const vx = ball.body.velocity.x;
         const vy = ball.body.velocity.y;
         const speed = Math.sqrt(vx * vx + vy * vy);
-        if (speed > 8) {
-          const scale = 8 / speed;
-          Matter.Body.setVelocity(ball.body, { x: vx * scale, y: vy * scale });
+
+        // Slow balls get kicked hard, moving balls get occasional redirects
+        const kickChance = speed < 1.5 ? 0.12 : 0.025;
+
+        if (Math.random() < kickChance) {
+          const angle = Math.random() * Math.PI * 2;
+          const strength = 2.5 + Math.random() * 4;
+          Matter.Body.setVelocity(ball.body, {
+            x: Math.cos(angle) * strength,
+            y: Math.sin(angle) * strength,
+          });
+        }
+
+        // Speed cap
+        if (speed > 7) {
+          const s = 7 / speed;
+          Matter.Body.setVelocity(ball.body, { x: vx * s, y: vy * s });
         }
       }
     });
