@@ -44,7 +44,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     if (!canvasRef.current) return;
 
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1.8, scale: 0.001 },
+      gravity: { x: 0, y: 1.2, scale: 0.001 },
       positionIterations: 12,
       velocityIterations: 8,
     });
@@ -228,7 +228,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const bx = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 6;
       const by = 20 + row * (BALL_RADIUS * 2.5);
       const body = Matter.Bodies.circle(bx, by, BALL_RADIUS, {
-        restitution: 0.6, friction: 0, frictionStatic: 0, frictionAir: 0.005, density: 0.001,
+        restitution: 0.6, friction: 0, frictionStatic: 0, frictionAir: 0.015, density: 0.001,
         label: `ball-${i}`,
       });
       balls.push({
