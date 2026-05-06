@@ -75,8 +75,8 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     y += 290;
 
     // ═══ Section 2: Zigzag S-curves ═══
-    for (let i = 0; i < 6; i++) {
-      const zy = y + i * 70;
+    for (let i = 0; i < 4; i++) {
+      const zy = y + i * 90;
       const fromLeft = i % 2 === 0;
       const gapW = 55;
       const ww = WIDTH - gapW;
@@ -84,12 +84,12 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(wx, zy, ww, 6, {
           isStatic: true, label: "zigzag",
-          angle: fromLeft ? 0.07 : -0.07,
+          angle: fromLeft ? 0.18 : -0.18,
           friction: 0.01, restitution: 0.3,
         })
       );
     }
-    y += 460;
+    y += 400;
 
     // ═══ Section 3: Diamond obstacles ═══
     const diamonds = [
@@ -133,8 +133,8 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     y += 360;
 
     // ═══ Section 5: Tighter zigzag ═══
-    for (let i = 0; i < 5; i++) {
-      const zy = y + i * 60;
+    for (let i = 0; i < 3; i++) {
+      const zy = y + i * 100;
       const fromLeft = i % 2 === 0;
       const gapW = 45;
       const ww = WIDTH - gapW;
@@ -142,7 +142,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(wx, zy, ww, 6, {
           isStatic: true, label: "zigzag",
-          angle: fromLeft ? 0.1 : -0.1,
+          angle: fromLeft ? 0.22 : -0.22,
           friction: 0.01, restitution: 0.3,
         })
       );
