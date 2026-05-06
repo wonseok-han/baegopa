@@ -44,7 +44,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     if (!canvasRef.current) return;
 
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1, scale: 0.001 },
+      gravity: { x: 0, y: 1.8, scale: 0.001 },
       positionIterations: 12,
       velocityIterations: 8,
     });
@@ -87,7 +87,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         Matter.Bodies.rectangle(wx, zy, ww, 14, {
           isStatic: true, label: "zigzag",
           angle: fromLeft ? 0.18 : -0.18,
-          friction: 0, frictionStatic: 0, restitution: 0.3,
+          friction: 0, frictionStatic: 0, restitution: 0.5,
         })
       );
     }
@@ -145,7 +145,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         Matter.Bodies.rectangle(wx, zy, ww, 14, {
           isStatic: true, label: "zigzag",
           angle: fromLeft ? 0.22 : -0.22,
-          friction: 0, frictionStatic: 0, restitution: 0.3,
+          friction: 0, frictionStatic: 0, restitution: 0.5,
         })
       );
     }
@@ -193,27 +193,23 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     }
     y += 230;
 
-    // ═══ Section 8: Final V-funnel ═══
-    for (let i = 0; i < 3; i++) {
-      const fy = y + i * 70;
-      const inset = 15 + i * 20;
-      const wallLen = inset + 30;
-      Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(inset / 2 + 15, fy, wallLen, 14, {
-          isStatic: true, label: "funnel",
-          angle: 0.3 + i * 0.05,
-          friction: 0, frictionStatic: 0, restitution: 0.3,
-        })
-      );
-      Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(WIDTH - inset / 2 - 15, fy, wallLen, 14, {
-          isStatic: true, label: "funnel",
-          angle: -(0.3 + i * 0.05),
-          friction: 0, frictionStatic: 0, restitution: 0.3,
-        })
-      );
-    }
-    y += 260;
+    // ═══ Section 8: Final V-funnel (single wide pair) ═══
+    const funnelLen = WIDTH * 0.42;
+    Matter.Composite.add(engine.world,
+      Matter.Bodies.rectangle(funnelLen / 2, y, funnelLen, 14, {
+        isStatic: true, label: "funnel",
+        angle: 0.35,
+        friction: 0, frictionStatic: 0, restitution: 0.3,
+      })
+    );
+    Matter.Composite.add(engine.world,
+      Matter.Bodies.rectangle(WIDTH - funnelLen / 2, y, funnelLen, 14, {
+        isStatic: true, label: "funnel",
+        angle: -0.35,
+        friction: 0, frictionStatic: 0, restitution: 0.3,
+      })
+    );
+    y += 120;
 
     // Finish line
     finishYRef.current = y;
@@ -232,7 +228,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       const bx = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 6;
       const by = 20 + row * (BALL_RADIUS * 2.5);
       const body = Matter.Bodies.circle(bx, by, BALL_RADIUS, {
-        restitution: 0.6, friction: 0.005, frictionStatic: 0, density: 0.001,
+        restitution: 0.6, friction: 0, frictionStatic: 0, frictionAir: 0.005, density: 0.001,
         label: `ball-${i}`,
       });
       balls.push({
