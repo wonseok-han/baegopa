@@ -192,26 +192,26 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     y += 230;
 
     // ═══ Section 8: Final V-funnel ═══
-    for (let i = 0; i < 5; i++) {
-      const fy = y + i * 55;
-      const inset = 20 + i * 28;
+    for (let i = 0; i < 3; i++) {
+      const fy = y + i * 70;
+      const inset = 15 + i * 20;
       const wallLen = inset + 30;
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(inset / 2 + 15, fy, wallLen, 6, {
           isStatic: true, label: "funnel",
-          angle: 0.28 + i * 0.04,
+          angle: 0.3 + i * 0.05,
           friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(WIDTH - inset / 2 - 15, fy, wallLen, 6, {
           isStatic: true, label: "funnel",
-          angle: -(0.28 + i * 0.04),
+          angle: -(0.3 + i * 0.05),
           friction: 0, frictionStatic: 0, restitution: 0.3,
         })
       );
     }
-    y += 310;
+    y += 260;
 
     // Finish line
     finishYRef.current = y;
