@@ -24,10 +24,10 @@ const KAKAO_SDK_URL = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${process.env.NEXT
 
 export default function Home() {
   const router = useRouter();
-  const { coordinates, error, loading, requestPermission } = useGeolocation();
+  const { coordinates, error, loading, requestPermission, reset: resetGeolocation } = useGeolocation();
   const [radius, setRadius] = useState(() => {
     const stored = getStoredLocation();
-    return stored ? stored.radius : 1000;
+    return stored ? stored.radius : 100;
   });
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [mapReady, setMapReady] = useState(false);
@@ -155,12 +155,15 @@ export default function Home() {
 
   const handleReset = () => {
     clearAllStorage();
-    mapRef.current = null;
-    circleRef.current = null;
+    markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
+    if (circleRef.current) circleRef.current.setMap(null);
+    circleRef.current = null;
+    mapRef.current = null;
     setRestaurants([]);
     setMapReady(false);
-    requestPermission();
+    setRadius(100);
+    resetGeolocation();
   };
 
   return (

@@ -24,6 +24,10 @@ export function useGeolocation() {
     }
   }, []);
 
+  const reset = useCallback(() => {
+    setState({ coordinates: null, error: null, loading: false });
+  }, []);
+
   const requestPermission = useCallback(() => {
     if (!navigator.geolocation) {
       setState((prev) => ({
@@ -57,5 +61,5 @@ export function useGeolocation() {
     );
   }, []);
 
-  return { ...state, requestPermission };
+  return { ...state, requestPermission, reset };
 }
