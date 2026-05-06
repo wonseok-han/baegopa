@@ -63,7 +63,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
 
       Matter.Composite.add(engine.world,
         Matter.Bodies.rectangle(mx, my, len, 4, {
-          isStatic: true, angle, restitution: 0.3, label: "boundary",
+          isStatic: true, angle, restitution: 0.9, friction: 0, label: "boundary",
         })
       );
     }
@@ -77,7 +77,7 @@ export function GachaGame({ candidates, onResult }: GameProps) {
       const x = CENTER + Math.cos(angle) * dist;
       const y = CENTER + Math.sin(angle) * dist;
       const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.3, friction: 0.05, density: 0.001, label: `ball-${i}`,
+        restitution: 0.8, friction: 0, frictionAir: 0.01, density: 0.0005, label: `ball-${i}`,
       });
       balls.push({ name: selected[i].name, color: COLORS[i % COLORS.length], body });
       Matter.Composite.add(engine.world, body);
@@ -88,32 +88,39 @@ export function GachaGame({ candidates, onResult }: GameProps) {
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
 
-    // Chaotic gravity for mixing - direction and speed change unpredictably
-    mixAngleRef.current = 0;
-    let mixSpeed = 0.08;
-    let mixIntensity = 0.002;
-    let shakeTimer = 0;
+    // Air blast mixing - random force on each ball individually
+    let windAngle = Math.random() * Math.PI * 2;
+    let windTimer = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
       if (winnerRef.current) return;
-      shakeTimer++;
-      // Change rotation speed and direction randomly
-      if (shakeTimer % 30 === 0) {
-        mixSpeed = (0.05 + Math.random() * 0.12) * (Math.random() > 0.4 ? 1 : -1);
-        mixIntensity = 0.0015 + Math.random() * 0.002;
+      windTimer++;
+
+      // Global wind direction shifts
+      if (windTimer % 20 === 0) {
+        windAngle += (Math.random() - 0.5) * 2.5;
       }
-      // Occasional strong shake
-      if (shakeTimer % 50 === 0) {
-        for (const ball of balls) {
+
+      for (const ball of balls) {
+        // Per-ball random turbulence
+        const turbX = (Math.random() - 0.5) * 0.0006;
+        const turbY = (Math.random() - 0.5) * 0.0006;
+        // Wind push
+        const windForce = 0.00025 + Math.random() * 0.00015;
+        const fx = Math.cos(windAngle) * windForce + turbX;
+        const fy = Math.sin(windAngle) * windForce + turbY;
+        Matter.Body.applyForce(ball.body, ball.body.position, { x: fx, y: fy });
+
+        // Keep balls inside by pushing toward center if too far
+        const dx = ball.body.position.x - CENTER;
+        const dy = ball.body.position.y - CENTER;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > RADIUS * 0.75) {
           Matter.Body.applyForce(ball.body, ball.body.position, {
-            x: (Math.random() - 0.5) * 0.0015,
-            y: (Math.random() - 0.5) * 0.0015,
+            x: -dx * 0.00003,
+            y: -dy * 0.00003,
           });
         }
       }
-      mixAngleRef.current += mixSpeed;
-      engine.gravity.x = Math.cos(mixAngleRef.current) * mixIntensity;
-      engine.gravity.y = Math.sin(mixAngleRef.current) * mixIntensity;
-      engine.gravity.scale = 1;
     });
 
     // After mixing, slow down then pick
