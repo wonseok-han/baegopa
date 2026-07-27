@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Geist } from "next/font/google";
 import "./globals.css";
 
 const pretendard = localFont({
@@ -10,14 +9,9 @@ const pretendard = localFont({
   weight: "100 900",
 });
 
-const geist = Geist({
-  variable: "--font-geist",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
   title: "배고파 — 뭐 먹지?",
-  description: "선택 장애를 위한 미니게임 음식점 선택기",
+  description: "주변 음식점을 마블런으로 골라주는 위치 기반 선택기",
   icons: {
     icon: "/favicon.svg",
   },
@@ -31,7 +25,7 @@ export default function RootLayout({
   return (
     <html
       lang="ko"
-      className={`${pretendard.variable} ${geist.variable} h-full antialiased`}
+      className={`${pretendard.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

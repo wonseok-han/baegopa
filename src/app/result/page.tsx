@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { getStoredLocation } from "@/lib/storage";
 
@@ -13,25 +13,12 @@ function ResultContent() {
   const distance = searchParams.get("distance");
   const address = searchParams.get("address");
   const placeUrl = searchParams.get("placeUrl");
-  const gameId = searchParams.get("gameId");
 
-  if (!name) {
-    router.replace("/");
-    return null;
-  }
+  useEffect(() => {
+    if (!name) router.replace("/");
+  }, [name, router]);
 
   const handleRetry = () => {
-    const loc = getStoredLocation();
-    if (loc && gameId) {
-      router.push(
-        `/play?lat=${loc.lat}&lng=${loc.lng}&radius=${loc.radius}&gameId=${gameId}`
-      );
-    } else {
-      router.back();
-    }
-  };
-
-  const handleOtherGame = () => {
     const loc = getStoredLocation();
     if (loc) {
       router.push(`/play?lat=${loc.lat}&lng=${loc.lng}&radius=${loc.radius}`);
@@ -40,10 +27,12 @@ function ResultContent() {
     }
   };
 
+  if (!name) return null;
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
       <div className="text-center">
-        <p className="text-sm font-medium text-muted">오늘의 선택</p>
+        <p className="text-sm font-medium text-muted">마블런 우승</p>
         <h1 className="mt-2 text-3xl font-extrabold tracking-tight">{name}</h1>
       </div>
 
@@ -81,13 +70,7 @@ function ResultContent() {
           onClick={handleRetry}
           className="rounded-full bg-primary px-8 py-3.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-hover active:scale-95"
         >
-          다시 고르기
-        </button>
-        <button
-          onClick={handleOtherGame}
-          className="rounded-full border border-border px-8 py-3.5 text-sm font-medium transition-all hover:bg-surface-dim active:scale-95"
-        >
-          다른 게임하기
+          다시 레이스
         </button>
         <button
           onClick={() => router.push("/")}

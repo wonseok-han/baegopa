@@ -38,6 +38,8 @@ export default function Home() {
   const [searchPage, setSearchPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const placesAbortRef = useRef<AbortController | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
   const searchListRef = useRef<HTMLUListElement>(null);
   const currentQueryRef = useRef("");
   const [mapReady, setMapReady] = useState(false);
@@ -125,6 +127,8 @@ export default function Home() {
   const fetchAndMarkRestaurants = useCallback(async () => {
     if (!coordinates) return;
 
+    placesAbortRef.current?.abort();
+
     const cached = getStoredPlaces(coordinates.lat, coordinates.lng, radius);
     if (cached && cached.length > 0) {
       setRestaurants(cached);
@@ -132,18 +136,30 @@ export default function Home() {
       return;
     }
 
+    const controller = new AbortController();
+    placesAbortRef.current = controller;
+
     try {
       const res = await fetch(
-        `/api/places?lat=${coordinates.lat}&lng=${coordinates.lng}&radius=${radius}`
+        `/api/places?lat=${coordinates.lat}&lng=${coordinates.lng}&radius=${radius}`,
+        { signal: controller.signal }
       );
       const data = await res.json();
-      if (res.ok && data.restaurants) {
+      if (
+        !controller.signal.aborted &&
+        placesAbortRef.current === controller &&
+        res.ok &&
+        data.restaurants
+      ) {
         setRestaurants(data.restaurants);
         setStoredLocation(coordinates.lat, coordinates.lng, radius);
         setStoredPlaces(coordinates.lat, coordinates.lng, radius, data.restaurants);
         updateMarkers(data.restaurants);
       }
-    } catch {
+    } catch (requestError) {
+      if (requestError instanceof DOMException && requestError.name === "AbortError") {
+        return;
+      }
       // silently fail, user can proceed without markers
     }
   }, [coordinates, radius, updateMarkers]);
@@ -164,6 +180,9 @@ export default function Home() {
   };
 
   const handleReset = () => {
+    placesAbortRef.current?.abort();
+    searchAbortRef.current?.abort();
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     clearAllStorage();
     markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
@@ -182,34 +201,56 @@ export default function Home() {
   };
 
   const fetchSearchResults = useCallback(async (query: string, page: number, append: boolean) => {
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     if (append) setLoadingMore(true); else setSearching(true);
     try {
-      const res = await fetch(`/api/search?query=${encodeURIComponent(query)}&page=${page}`);
+      const res = await fetch(
+        `/api/search?query=${encodeURIComponent(query)}&page=${page}`,
+        { signal: controller.signal }
+      );
       const data = await res.json();
-      if (res.ok && data.results) {
+      if (
+        !controller.signal.aborted &&
+        searchAbortRef.current === controller &&
+        currentQueryRef.current === query &&
+        res.ok &&
+        data.results
+      ) {
         setSearchResults((prev) => append ? [...prev, ...data.results] : data.results);
         setHasMore(data.hasMore ?? false);
         setSearchPage(page);
       }
-    } catch {
+    } catch (requestError) {
+      if (requestError instanceof DOMException && requestError.name === "AbortError") {
+        return;
+      }
       // silently fail
     } finally {
-      setSearching(false);
-      setLoadingMore(false);
+      if (searchAbortRef.current === controller) {
+        setSearching(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
   const handleSearchInput = (value: string) => {
     setSearchQuery(value);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    if (value.trim().length < 2) {
+    searchAbortRef.current?.abort();
+    const normalized = value.trim();
+    currentQueryRef.current = normalized;
+    if (normalized.length < 2) {
       setSearchResults([]);
       setHasMore(false);
+      setSearching(false);
+      setLoadingMore(false);
       return;
     }
-    currentQueryRef.current = value.trim();
     searchTimerRef.current = setTimeout(() => {
-      fetchSearchResults(value.trim(), 1, false);
+      fetchSearchResults(normalized, 1, false);
     }, 300);
   };
 
@@ -227,11 +268,20 @@ export default function Home() {
   };
 
   const handleSelectPlace = (place: { name: string; address: string; lat: number; lng: number }) => {
+    searchAbortRef.current?.abort();
     setManualCoordinates(place.lat, place.lng);
     setSearchQuery("");
     setSearchResults([]);
     setShowSearch(false);
   };
+
+  useEffect(() => {
+    return () => {
+      placesAbortRef.current?.abort();
+      searchAbortRef.current?.abort();
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, []);
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
@@ -444,7 +494,7 @@ export default function Home() {
       )}
 
       <p className="text-xs text-muted">
-        위치 정보는 음식점 검색에만 사용되며 저장되지 않아요
+        위치 정보는 음식점 검색을 위해 현재 탭에만 임시 저장돼요
       </p>
     </div>
   );

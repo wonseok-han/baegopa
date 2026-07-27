@@ -1,548 +1,680 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Matter from "matter-js";
-import type { GameProps } from "@/types";
+import type { GameProps, Restaurant } from "@/types";
 
-const WIDTH = 320;
-const CANVAS_HEIGHT = 520;
-const BALL_RADIUS = 10;
+const WIDTH = 340;
+const VIEW_HEIGHT = 520;
+const WORLD_HEIGHT = 2100;
+const FINISH_Y = 1960;
+const BALL_RADIUS = 11;
+const MAX_RACERS = 12;
+
 const COLORS = [
-  "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
-  "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f43f5e",
-  "#a855f7", "#6366f1", "#10b981", "#f59e0b", "#e11d48",
-  "#84cc16", "#0ea5e9", "#d946ef", "#f472b6", "#2dd4bf",
+  "#ff6b35",
+  "#22c55e",
+  "#38bdf8",
+  "#fbbf24",
+  "#a78bfa",
+  "#fb7185",
+  "#2dd4bf",
+  "#60a5fa",
+  "#f472b6",
+  "#a3e635",
+  "#f97316",
+  "#818cf8",
 ];
 
-interface BallData {
-  name: string;
-  color: string;
+type RacePhase = "idle" | "racing" | "finished";
+
+interface Marble {
+  restaurant: Restaurant;
   body: Matter.Body;
-  finished: boolean;
+  color: string;
+  number: number;
+}
+
+function pickRacers(candidates: Restaurant[]) {
+  const shuffled = [...candidates];
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const target = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled.slice(0, MAX_RACERS);
+}
+
+function shortName(name: string, length = 8) {
+  return name.length > length ? `${name.slice(0, length)}…` : name;
+}
+
+function addPegField(
+  world: Matter.World,
+  startY: number,
+  rows: number,
+  columns: number,
+  spacingY: number
+) {
+  for (let row = 0; row < rows; row++) {
+    const shifted = row % 2 === 1;
+    const count = shifted ? columns - 1 : columns;
+    const spacingX = WIDTH / (columns + 1);
+    const startX = shifted ? spacingX * 1.5 : spacingX;
+
+    for (let column = 0; column < count; column++) {
+      Matter.Composite.add(
+        world,
+        Matter.Bodies.circle(
+          startX + column * spacingX,
+          startY + row * spacingY,
+          5,
+          {
+            isStatic: true,
+            restitution: 0.82,
+            friction: 0,
+            label: "peg",
+          }
+        )
+      );
+    }
+  }
+}
+
+function addRamp(
+  world: Matter.World,
+  y: number,
+  side: "left" | "right",
+  gap: number
+) {
+  const length = WIDTH - gap;
+  const x = side === "left" ? length / 2 : WIDTH - length / 2;
+  Matter.Composite.add(
+    world,
+    Matter.Bodies.rectangle(x, y, length, 14, {
+      isStatic: true,
+      angle: side === "left" ? 0.13 : -0.13,
+      friction: 0,
+      frictionStatic: 0,
+      restitution: 0.35,
+      chamfer: { radius: 7 },
+      label: "ramp",
+    })
+  );
 }
 
 export function PinballGame({ candidates, onResult }: GameProps) {
+  const racers = useMemo(() => pickRacers(candidates), [candidates]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Matter.Engine | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
-  const ballsRef = useRef<BallData[]>([]);
+  const marblesRef = useRef<Marble[]>([]);
   const cameraYRef = useRef(0);
-  const finishYRef = useRef(0);
-  const [started, setStarted] = useState(false);
-  const [status, setStatus] = useState("");
-  const [winner, setWinner] = useState("");
   const resolvedRef = useRef(false);
+  const animationRef = useRef<number>(0);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const leaderFrameRef = useRef(0);
 
-  const ballCount = candidates.length;
+  const [phase, setPhase] = useState<RacePhase>("idle");
+  const [winner, setWinner] = useState<Restaurant | null>(null);
+  const [leaders, setLeaders] = useState<Marble[]>([]);
+  const [progress, setProgress] = useState(0);
 
-  const startGame = useCallback(() => {
-    if (started) return;
-    setStarted(true);
+  const stopEngine = useCallback(() => {
+    cancelAnimationFrame(animationRef.current);
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    if (runnerRef.current) {
+      Matter.Runner.stop(runnerRef.current);
+      runnerRef.current = null;
+    }
+    if (engineRef.current) {
+      Matter.Events.off(engineRef.current, "beforeUpdate");
+      Matter.Events.off(engineRef.current, "afterUpdate");
+      Matter.Engine.clear(engineRef.current);
+      engineRef.current = null;
+    }
+  }, []);
+
+  const finishRace = useCallback(
+    (marble: Marble) => {
+      if (resolvedRef.current) return;
+      resolvedRef.current = true;
+      Matter.Body.setVelocity(marble.body, { x: 0, y: 0 });
+      Matter.Body.setStatic(marble.body, true);
+      setWinner(marble.restaurant);
+      setLeaders([marble]);
+      setProgress(100);
+      setPhase("finished");
+
+      const resultTimer = setTimeout(() => onResult(marble.restaurant), 2400);
+      timersRef.current.push(resultTimer);
+    },
+    [onResult]
+  );
+
+  const startRace = useCallback(() => {
+    if (phase !== "idle" || !canvasRef.current) return;
+
+    stopEngine();
     resolvedRef.current = false;
-    setStatus(`${ballCount}개 구슬 레이스!`);
-
-    if (!canvasRef.current) return;
+    cameraYRef.current = 0;
+    leaderFrameRef.current = 0;
+    setWinner(null);
+    setLeaders([]);
+    setProgress(0);
+    setPhase("racing");
 
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1.2, scale: 0.001 },
+      gravity: { x: 0, y: 1.05, scale: 0.001 },
       positionIterations: 12,
-      velocityIterations: 8,
+      velocityIterations: 10,
     });
     engineRef.current = engine;
 
-    // Starting Y after ball placement
-    let y = 100 + Math.ceil(ballCount / 8) * (BALL_RADIUS * 2.5) + 40;
-
-    // Continuous side walls
-    const wallH = 5000;
-    Matter.Composite.add(engine.world, [
-      Matter.Bodies.rectangle(-5, wallH / 2, 10, wallH, { isStatic: true, label: "wall" }),
-      Matter.Bodies.rectangle(WIDTH + 5, wallH / 2, 10, wallH, { isStatic: true, label: "wall" }),
+    const world = engine.world;
+    Matter.Composite.add(world, [
+      Matter.Bodies.rectangle(-8, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
+        isStatic: true,
+        label: "wall",
+      }),
+      Matter.Bodies.rectangle(WIDTH + 8, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
+        isStatic: true,
+        label: "wall",
+      }),
+      Matter.Bodies.rectangle(WIDTH / 2, FINISH_Y + 85, WIDTH, 18, {
+        isStatic: true,
+        label: "floor",
+      }),
     ]);
 
-    // ═══ Section 1: Peg field ═══
-    for (let row = 0; row < 6; row++) {
-      const py = y + row * 42;
-      const cols = row % 2 === 0 ? 7 : 6;
-      const sp = WIDTH / (cols + 1);
-      const ox = row % 2 === 0 ? sp : sp + sp / 2;
-      for (let col = 0; col < cols; col++) {
-        Matter.Composite.add(engine.world,
-          Matter.Bodies.circle(ox + col * sp, py, 5, {
-            isStatic: true, restitution: 0.8, label: "peg",
-          })
-        );
-      }
-    }
-    y += 290;
+    const gate = Matter.Bodies.rectangle(WIDTH / 2, 128, WIDTH - 24, 12, {
+      isStatic: true,
+      friction: 0,
+      label: "gate",
+    });
+    Matter.Composite.add(world, gate);
 
-    // ═══ Section 2: Zigzag S-curves ═══
-    for (let i = 0; i < 4; i++) {
-      const zy = y + i * 130;
-      const fromLeft = i % 2 === 0;
-      const gapW = 55;
-      const ww = WIDTH - gapW;
-      const wx = fromLeft ? ww / 2 : WIDTH - ww / 2;
-      Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(wx, zy, ww, 14, {
-          isStatic: true, label: "zigzag",
-          angle: fromLeft ? 0.18 : -0.18,
-          friction: 0, frictionStatic: 0, restitution: 0.5,
+    addPegField(world, 220, 9, 7, 58);
+
+    const bumpers = [
+      { x: 86, y: 790, radius: 28 },
+      { x: 254, y: 790, radius: 28 },
+      { x: 170, y: 900, radius: 34 },
+    ];
+    bumpers.forEach(({ x, y, radius }) => {
+      Matter.Composite.add(
+        world,
+        Matter.Bodies.circle(x, y, radius, {
+          isStatic: true,
+          restitution: 1.08,
+          friction: 0,
+          label: "bumper",
         })
       );
-    }
-    y += 560;
+    });
 
-    // ═══ Section 3: Diamond obstacles ═══
-    const diamonds = [
-      { dx: 0.5, dy: 0, s: 28, spd: 0.02 },
-      { dx: 0.22, dy: 120, s: 22, spd: -0.025 },
-      { dx: 0.78, dy: 120, s: 22, spd: 0.025 },
-      { dx: 0.38, dy: 240, s: 25, spd: -0.018 },
-      { dx: 0.68, dy: 240, s: 20, spd: 0.022 },
-    ];
-    for (const d of diamonds) {
-      const diamond = Matter.Bodies.polygon(WIDTH * d.dx, y + d.dy, 4, d.s, {
-        isStatic: true, label: "diamond", restitution: 0.5,
+    const spinners: { body: Matter.Body; speed: number }[] = [];
+    [
+      { x: 92, y: 1035, speed: 0.035 },
+      { x: 248, y: 1035, speed: -0.035 },
+      { x: 170, y: 1145, speed: 0.042 },
+    ].forEach(({ x, y, speed }) => {
+      const body = Matter.Bodies.rectangle(x, y, 94, 8, {
+        isStatic: true,
+        restitution: 0.7,
+        chamfer: { radius: 4 },
+        label: "spinner",
       });
-      Matter.Composite.add(engine.world, diamond);
-      const spd = d.spd;
-      Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(diamond, spd));
-    }
-    for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 2; col++) {
-        Matter.Composite.add(engine.world,
-          Matter.Bodies.circle(35 + col * (WIDTH - 70), y + 60 + row * 90, 5, {
-            isStatic: true, restitution: 0.7, label: "peg",
-          })
-        );
-      }
-    }
-    y += 310;
+      spinners.push({ body, speed });
+      Matter.Composite.add(world, body);
+    });
 
-    // ═══ Section 4: Spinning bars ═══
-    for (let i = 0; i < 5; i++) {
-      const by = y + i * 60 + 30;
-      const bx = i % 2 === 0 ? WIDTH * 0.3 : WIDTH * 0.7;
-      const bar = Matter.Bodies.rectangle(bx, by, 80, 5, {
-        isStatic: true, label: "spinner", chamfer: { radius: 2.5 },
-        angle: Math.PI * 0.2 * (i % 2 === 0 ? 1 : -1),
+    addRamp(world, 1280, "left", 64);
+    addRamp(world, 1400, "right", 64);
+    addRamp(world, 1520, "left", 58);
+    addPegField(world, 1625, 4, 6, 54);
+
+    Matter.Composite.add(world, [
+      Matter.Bodies.rectangle(70, 1880, 155, 14, {
+        isStatic: true,
+        angle: 0.31,
+        friction: 0,
+        chamfer: { radius: 7 },
+        label: "funnel",
+      }),
+      Matter.Bodies.rectangle(WIDTH - 70, 1880, 155, 14, {
+        isStatic: true,
+        angle: -0.31,
+        friction: 0,
+        chamfer: { radius: 7 },
+        label: "funnel",
+      }),
+    ]);
+
+    const columns = Math.min(6, racers.length);
+    const marbles = racers.map((restaurant, index) => {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const x =
+        (WIDTH / (columns + 1)) * (column + 1) +
+        (Math.random() - 0.5) * 8;
+      const y = 48 + row * 30;
+      const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
+        restitution: 0.68,
+        friction: 0,
+        frictionStatic: 0,
+        frictionAir: 0.009,
+        density: 0.0012,
+        label: `marble-${restaurant.placeId}`,
       });
-      Matter.Composite.add(engine.world, bar);
-      const spd = (i % 2 === 0 ? 1 : -1) * 0.04;
-      Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(bar, spd));
-    }
-    y += 360;
-
-    // ═══ Section 5: Tighter zigzag ═══
-    for (let i = 0; i < 3; i++) {
-      const zy = y + i * 140;
-      const fromLeft = i % 2 === 0;
-      const gapW = 45;
-      const ww = WIDTH - gapW;
-      const wx = fromLeft ? ww / 2 : WIDTH - ww / 2;
-      Matter.Composite.add(engine.world,
-        Matter.Bodies.rectangle(wx, zy, ww, 14, {
-          isStatic: true, label: "zigzag",
-          angle: fromLeft ? 0.22 : -0.22,
-          friction: 0, frictionStatic: 0, restitution: 0.5,
-        })
-      );
-    }
-    y += 460;
-
-    // ═══ Section 6: Dense peg field ═══
-    for (let row = 0; row < 8; row++) {
-      const py = y + row * 38;
-      const cols = row % 2 === 0 ? 8 : 7;
-      const sp = WIDTH / (cols + 1);
-      const ox = row % 2 === 0 ? sp : sp + sp / 2;
-      for (let col = 0; col < cols; col++) {
-        Matter.Composite.add(engine.world,
-          Matter.Bodies.circle(ox + col * sp, py, 5, {
-            isStatic: true, restitution: 0.9, label: "peg",
-          })
-        );
-      }
-    }
-    y += 340;
-
-    // ═══ Section 7: Mixed diamonds + spinners ═══
-    const mixDiamonds = [
-      { dx: 0.3, dy: 30, s: 20, spd: -0.03 },
-      { dx: 0.7, dy: 30, s: 20, spd: 0.03 },
-      { dx: 0.5, dy: 130, s: 24, spd: -0.02 },
-    ];
-    for (const d of mixDiamonds) {
-      const dm = Matter.Bodies.polygon(WIDTH * d.dx, y + d.dy, 4, d.s, {
-        isStatic: true, label: "diamond", restitution: 0.5,
-      });
-      Matter.Composite.add(engine.world, dm);
-      const spd = d.spd;
-      Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(dm, spd));
-    }
-    for (let i = 0; i < 3; i++) {
-      const by = y + 70 + i * 60;
-      const bx = i % 2 === 0 ? WIDTH * 0.15 : WIDTH * 0.85;
-      const bar = Matter.Bodies.rectangle(bx, by, 50, 5, {
-        isStatic: true, label: "spinner", chamfer: { radius: 2.5 },
-      });
-      Matter.Composite.add(engine.world, bar);
-      const spd = (i % 2 === 0 ? 1 : -1) * 0.05;
-      Matter.Events.on(engine, "beforeUpdate", () => Matter.Body.rotate(bar, spd));
-    }
-    y += 230;
-
-    // ═══ Section 8: Final V-funnel (single wide pair) ═══
-    const funnelLen = WIDTH * 0.42;
-    Matter.Composite.add(engine.world,
-      Matter.Bodies.rectangle(funnelLen / 2, y, funnelLen, 14, {
-        isStatic: true, label: "funnel",
-        angle: 0.35,
-        friction: 0, frictionStatic: 0, restitution: 0.3,
-      })
-    );
-    Matter.Composite.add(engine.world,
-      Matter.Bodies.rectangle(WIDTH - funnelLen / 2, y, funnelLen, 14, {
-        isStatic: true, label: "funnel",
-        angle: -0.35,
-        friction: 0, frictionStatic: 0, restitution: 0.3,
-      })
-    );
-    y += 120;
-
-    // Finish line
-    finishYRef.current = y;
-    Matter.Composite.add(engine.world,
-      Matter.Bodies.rectangle(WIDTH / 2, y + 80, WIDTH, 10, {
-        isStatic: true, label: "floor",
-      })
-    );
-
-    // Create balls
-    const balls: BallData[] = [];
-    const cols = Math.min(ballCount, 8);
-    for (let i = 0; i < ballCount; i++) {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const bx = (WIDTH / (cols + 1)) * (col + 1) + (Math.random() - 0.5) * 6;
-      const by = 20 + row * (BALL_RADIUS * 2.5);
-      const body = Matter.Bodies.circle(bx, by, BALL_RADIUS, {
-        restitution: 0.6, friction: 0, frictionStatic: 0, frictionAir: 0.015, density: 0.001,
-        label: `ball-${i}`,
-      });
-      balls.push({
-        name: candidates[i].name,
-        color: COLORS[i % COLORS.length],
+      Matter.Composite.add(world, body);
+      return {
+        restaurant,
         body,
-        finished: false,
-      });
-      Matter.Composite.add(engine.world, body);
-    }
-    ballsRef.current = balls;
+        color: COLORS[index % COLORS.length],
+        number: index + 1,
+      };
+    });
+    marblesRef.current = marbles;
 
-    // Anti-stuck nudge - frequent and aggressive
     let tick = 0;
     Matter.Events.on(engine, "beforeUpdate", () => {
-      tick++;
-      if (tick % 60 !== 0) return;
-      for (const ball of balls) {
-        if (ball.finished) continue;
-        const spd = Math.sqrt(ball.body.velocity.x ** 2 + ball.body.velocity.y ** 2);
-        if (spd < 0.5) {
-          Matter.Body.applyForce(ball.body, ball.body.position, {
-            x: (Math.random() - 0.5) * 0.001,
-            y: 0.0008,
+      tick += 1;
+      spinners.forEach(({ body, speed }) => Matter.Body.rotate(body, speed));
+
+      if (tick % 75 !== 0) return;
+      marbles.forEach((marble) => {
+        const { x, y } = marble.body.velocity;
+        const speed = Math.hypot(x, y);
+        if (speed < 0.65 && marble.body.position.y < FINISH_Y) {
+          Matter.Body.applyForce(marble.body, marble.body.position, {
+            x: (Math.random() - 0.5) * 0.0012,
+            y: 0.001,
           });
         }
-      }
+      });
     });
+
+    const gateTimer = setTimeout(() => {
+      Matter.Composite.remove(world, gate);
+      marbles.forEach((marble) => {
+        Matter.Body.applyForce(marble.body, marble.body.position, {
+          x: (Math.random() - 0.5) * 0.0007,
+          y: 0.0003,
+        });
+      });
+    }, 650);
+    timersRef.current.push(gateTimer);
+
+    const timeoutTimer = setTimeout(() => {
+      if (resolvedRef.current || marbles.length === 0) return;
+      const leader = [...marbles].sort(
+        (a, b) => b.body.position.y - a.body.position.y
+      )[0];
+      finishRace(leader);
+    }, 28000);
+    timersRef.current.push(timeoutTimer);
 
     const runner = Matter.Runner.create();
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
-  }, [started, candidates, ballCount]);
+  }, [finishRace, phase, racers, stopEngine]);
 
-  // Render loop
   useEffect(() => {
-    if (!canvasRef.current || !started) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d")!;
-    let animId: number;
+    if (!canvas) return;
 
-    const drawVerts = (verts: Matter.Vector[], camY: number) => {
-      ctx.beginPath();
-      ctx.moveTo(verts[0].x, verts[0].y - camY);
-      for (let i = 1; i < verts.length; i++) {
-        ctx.lineTo(verts[i].x, verts[i].y - camY);
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = WIDTH * pixelRatio;
+    canvas.height = VIEW_HEIGHT * pixelRatio;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const drawPolygon = (body: Matter.Body, cameraY: number) => {
+      context.beginPath();
+      context.moveTo(body.vertices[0].x, body.vertices[0].y - cameraY);
+      for (let index = 1; index < body.vertices.length; index++) {
+        context.lineTo(body.vertices[index].x, body.vertices[index].y - cameraY);
       }
-      ctx.closePath();
+      context.closePath();
+    };
+
+    const drawCourseLabel = (
+      label: string,
+      y: number,
+      cameraY: number,
+      color: string
+    ) => {
+      const screenY = y - cameraY;
+      if (screenY < -30 || screenY > VIEW_HEIGHT + 30) return;
+      context.font = "700 10px sans-serif";
+      context.textAlign = "left";
+      context.fillStyle = color;
+      context.globalAlpha = 0.7;
+      context.fillText(label, 14, screenY);
+      context.globalAlpha = 1;
     };
 
     const render = () => {
-      ctx.clearRect(0, 0, WIDTH, CANVAS_HEIGHT);
-      ctx.fillStyle = "#050a18";
-      ctx.fillRect(0, 0, WIDTH, CANVAS_HEIGHT);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      const background = context.createLinearGradient(0, 0, 0, VIEW_HEIGHT);
+      background.addColorStop(0, "#091426");
+      background.addColorStop(1, "#050914");
+      context.fillStyle = background;
+      context.fillRect(0, 0, WIDTH, VIEW_HEIGHT);
 
       const engine = engineRef.current;
-      if (!engine) { animId = requestAnimationFrame(render); return; }
+      const marbles = marblesRef.current;
 
-      const finishY = finishYRef.current;
-      const active = ballsRef.current.filter((b) => !b.finished);
+      if (!engine || phase === "idle") {
+        context.strokeStyle = "rgba(56, 189, 248, 0.12)";
+        context.lineWidth = 1;
+        for (let y = 24; y < VIEW_HEIGHT; y += 32) {
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(WIDTH, y);
+          context.stroke();
+        }
+        animationRef.current = requestAnimationFrame(render);
+        return;
+      }
 
-      // Check finish - first ball to cross wins
+      const sorted = [...marbles].sort(
+        (a, b) => b.body.position.y - a.body.position.y
+      );
+      const leadY = sorted[0]?.body.position.y ?? 0;
+      const targetCamera = resolvedRef.current
+        ? FINISH_Y - VIEW_HEIGHT * 0.72
+        : Math.max(0, Math.min(leadY - VIEW_HEIGHT * 0.32, WORLD_HEIGHT - VIEW_HEIGHT));
+      cameraYRef.current += (targetCamera - cameraYRef.current) * 0.055;
+      const cameraY = cameraYRef.current;
+
       if (!resolvedRef.current) {
-        for (const ball of ballsRef.current) {
-          if (!ball.finished && ball.body.position.y >= finishY) {
-            ball.finished = true;
-            resolvedRef.current = true;
-            setWinner(ball.name);
-            setStatus("우승!");
-            const result = candidates.find((c) => c.name === ball.name) || candidates[0];
-            setTimeout(() => onResult(result), 2500);
-            break;
-          }
+        leaderFrameRef.current += 1;
+        if (leaderFrameRef.current % 12 === 0) {
+          setLeaders(sorted.slice(0, 3));
+          setProgress(Math.min(99, Math.round((leadY / FINISH_Y) * 100)));
         }
       }
 
-      // Camera: follow leader, lock on finish after winner
-      if (resolvedRef.current) {
-        const target = Math.max(0, finishY - CANVAS_HEIGHT * 0.5);
-        cameraYRef.current += (target - cameraYRef.current) * 0.06;
-      } else if (active.length > 0) {
-        const sorted = active.map((b) => b.body.position.y).sort((a, b) => b - a);
-        const leadY = sorted[0];
-        const target = Math.max(0, leadY - CANVAS_HEIGHT * 0.35);
-        cameraYRef.current += (target - cameraYRef.current) * 0.05;
-      }
-      const camY = cameraYRef.current;
+      drawCourseLabel("01  PEG DROP", 190, cameraY, "#38bdf8");
+      drawCourseLabel("02  BUMPER FIELD", 735, cameraY, "#f472b6");
+      drawCourseLabel("03  SPIN ZONE", 980, cameraY, "#fbbf24");
+      drawCourseLabel("04  SWITCHBACK", 1235, cameraY, "#a78bfa");
+      drawCourseLabel("05  FINAL DROP", 1590, cameraY, "#2dd4bf");
 
-      // Side wall neon glow lines
-      ctx.strokeStyle = "rgba(34, 197, 94, 0.15)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(0.5, 0);
-      ctx.lineTo(0.5, CANVAS_HEIGHT);
-      ctx.moveTo(WIDTH - 0.5, 0);
-      ctx.lineTo(WIDTH - 0.5, CANVAS_HEIGHT);
-      ctx.stroke();
-
-      // Draw obstacles
       for (const body of Matter.Composite.allBodies(engine.world)) {
-        if (body.label === "wall" || body.label === "floor" || body.label.startsWith("ball")) continue;
+        if (
+          body.label === "wall" ||
+          body.label === "floor" ||
+          body.label.startsWith("marble")
+        ) {
+          continue;
+        }
 
-        const screenY = body.position.y - camY;
-        if (screenY < -100 || screenY > CANVAS_HEIGHT + 100) continue;
+        const screenY = body.position.y - cameraY;
+        if (screenY < -100 || screenY > VIEW_HEIGHT + 100) continue;
 
         if (body.label === "peg") {
-          ctx.shadowColor = "#06b6d4";
-          ctx.shadowBlur = 6;
-          ctx.beginPath();
-          ctx.arc(body.position.x, screenY, 5, 0, Math.PI * 2);
-          ctx.fillStyle = "#0e7490";
-          ctx.fill();
-          ctx.shadowBlur = 0;
+          context.shadowColor = "#38bdf8";
+          context.shadowBlur = 8;
+          context.beginPath();
+          context.arc(body.position.x, screenY, 5, 0, Math.PI * 2);
+          context.fillStyle = "#0e7490";
+          context.fill();
+          context.strokeStyle = "#67e8f9";
+          context.lineWidth = 1;
+          context.stroke();
+          context.shadowBlur = 0;
+          continue;
         }
 
-        if (body.label === "zigzag" || body.label === "funnel") {
-          ctx.shadowColor = "#22d3ee";
-          ctx.shadowBlur = 8;
-          drawVerts(body.vertices, camY);
-          ctx.fillStyle = body.label === "funnel" ? "#0891b2" : "#0e7490";
-          ctx.fill();
-          ctx.strokeStyle = "#22d3ee";
-          ctx.lineWidth = 0.5;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
+        drawPolygon(body, cameraY);
+        if (body.label === "bumper") {
+          context.shadowColor = "#fb7185";
+          context.shadowBlur = 16;
+          context.fillStyle = "#9f1239";
+          context.strokeStyle = "#fda4af";
+        } else if (body.label === "spinner") {
+          context.shadowColor = "#fbbf24";
+          context.shadowBlur = 12;
+          context.fillStyle = "#b45309";
+          context.strokeStyle = "#fde68a";
+        } else if (body.label === "gate") {
+          context.shadowColor = "#38bdf8";
+          context.shadowBlur = 10;
+          context.fillStyle = "#0369a1";
+          context.strokeStyle = "#7dd3fc";
+        } else {
+          context.shadowColor = "#a78bfa";
+          context.shadowBlur = 9;
+          context.fillStyle = body.label === "funnel" ? "#0f766e" : "#5b21b6";
+          context.strokeStyle =
+            body.label === "funnel" ? "#5eead4" : "#c4b5fd";
         }
+        context.lineWidth = 1;
+        context.fill();
+        context.stroke();
+        context.shadowBlur = 0;
+      }
 
-        if (body.label === "diamond") {
-          ctx.shadowColor = "#22d3ee";
-          ctx.shadowBlur = 15;
-          drawVerts(body.vertices, camY);
-          ctx.fillStyle = "#0e7490";
-          ctx.fill();
-          ctx.strokeStyle = "#22d3ee";
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-        }
+      const finishScreenY = FINISH_Y - cameraY;
+      if (finishScreenY > -30 && finishScreenY < VIEW_HEIGHT + 30) {
+        context.setLineDash([9, 5]);
+        context.strokeStyle = "#fbbf24";
+        context.shadowColor = "#fbbf24";
+        context.shadowBlur = 8;
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(18, finishScreenY);
+        context.lineTo(WIDTH - 18, finishScreenY);
+        context.stroke();
+        context.setLineDash([]);
+        context.shadowBlur = 0;
+        context.fillStyle = "#fde68a";
+        context.font = "800 12px sans-serif";
+        context.textAlign = "center";
+        context.fillText("FINISH", WIDTH / 2, finishScreenY - 12);
+      }
 
-        if (body.label === "spinner") {
-          ctx.shadowColor = "#fbbf24";
-          ctx.shadowBlur = 10;
-          drawVerts(body.vertices, camY);
-          ctx.fillStyle = "#d97706";
-          ctx.fill();
-          ctx.shadowBlur = 0;
+      for (const marble of marbles) {
+        const x = marble.body.position.x;
+        const y = marble.body.position.y - cameraY;
+        if (y < -40 || y > VIEW_HEIGHT + 40) continue;
+
+        const isWinner =
+          winner?.placeId === marble.restaurant.placeId && resolvedRef.current;
+        context.shadowColor = isWinner ? "#fbbf24" : marble.color;
+        context.shadowBlur = isWinner ? 22 : 10;
+        context.beginPath();
+        context.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+        context.fillStyle = marble.color;
+        context.fill();
+        context.strokeStyle = isWinner ? "#fde68a" : "rgba(255,255,255,0.75)";
+        context.lineWidth = isWinner ? 3 : 1.5;
+        context.stroke();
+        context.shadowBlur = 0;
+
+        const highlight = context.createRadialGradient(
+          x - 4,
+          y - 5,
+          1,
+          x,
+          y,
+          BALL_RADIUS
+        );
+        highlight.addColorStop(0, "rgba(255,255,255,0.75)");
+        highlight.addColorStop(0.35, "rgba(255,255,255,0.08)");
+        highlight.addColorStop(1, "rgba(0,0,0,0.24)");
+        context.fillStyle = highlight;
+        context.beginPath();
+        context.arc(x, y, BALL_RADIUS - 1, 0, Math.PI * 2);
+        context.fill();
+
+        context.fillStyle = "#ffffff";
+        context.font = "800 9px sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(String(marble.number), x, y + 0.5);
+        context.textBaseline = "alphabetic";
+
+        if (isWinner) {
+          context.strokeStyle = "#fbbf24";
+          context.lineWidth = 2;
+          context.beginPath();
+          context.arc(x, y, BALL_RADIUS + 9, 0, Math.PI * 2);
+          context.stroke();
         }
       }
 
-      // Finish line
-      const flY = finishY - camY;
-      if (flY > -10 && flY < CANVAS_HEIGHT + 10) {
-        ctx.setLineDash([8, 4]);
-        ctx.shadowColor = "#fbbf24";
-        ctx.shadowBlur = 4;
-        ctx.strokeStyle = "#fbbf24";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(10, flY);
-        ctx.lineTo(WIDTH - 10, flY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = "#fbbf24";
-        ctx.font = "bold 10px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("FINISH", WIDTH / 2, flY - 8);
-      }
-
-      // Draw balls
-      for (const ball of ballsRef.current) {
-        if (ball.finished && ball.name !== winner) continue;
-        const { x, y: by } = ball.body.position;
-        const sY = by - camY;
-        if (sY < -30 || sY > CANVAS_HEIGHT + 30) continue;
-
-        const isWin = winner === ball.name;
-        const angle = ball.body.angle;
-
-        // Ball glow
-        ctx.shadowColor = ball.color;
-        ctx.shadowBlur = isWin ? 15 : 6;
-        ctx.beginPath();
-        ctx.arc(x, sY, BALL_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = ball.color;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = isWin ? "#fbbf24" : "rgba(255,255,255,0.3)";
-        ctx.lineWidth = isWin ? 2 : 0.8;
-        ctx.stroke();
-
-        // Rolling stripe (shows rotation)
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(x, sY, BALL_RADIUS, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.strokeStyle = "rgba(255,255,255,0.2)";
-        ctx.lineWidth = 1.5;
-        const stripeOffset = BALL_RADIUS * 0.6;
-        ctx.beginPath();
-        ctx.moveTo(
-          x + Math.cos(angle) * -BALL_RADIUS * 1.2,
-          sY + Math.sin(angle) * -BALL_RADIUS * 1.2
-        );
-        ctx.lineTo(
-          x + Math.cos(angle) * BALL_RADIUS * 1.2,
-          sY + Math.sin(angle) * BALL_RADIUS * 1.2
-        );
-        ctx.moveTo(
-          x + Math.cos(angle + Math.PI / 2) * stripeOffset + Math.cos(angle) * -BALL_RADIUS,
-          sY + Math.sin(angle + Math.PI / 2) * stripeOffset + Math.sin(angle) * -BALL_RADIUS
-        );
-        ctx.lineTo(
-          x + Math.cos(angle + Math.PI / 2) * stripeOffset + Math.cos(angle) * BALL_RADIUS,
-          sY + Math.sin(angle + Math.PI / 2) * stripeOffset + Math.sin(angle) * BALL_RADIUS
-        );
-        ctx.stroke();
-        ctx.restore();
-
-        // Shine highlight (rotates with ball)
-        const shineX = x + Math.cos(angle - 2.3) * BALL_RADIUS * 0.45;
-        const shineY = sY + Math.sin(angle - 2.3) * BALL_RADIUS * 0.45;
-        ctx.beginPath();
-        ctx.arc(shineX, shineY, 2, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255,0.5)";
-        ctx.fill();
-
-        // Restaurant name (rotates with ball)
-        ctx.save();
-        ctx.translate(x, sY);
-        ctx.rotate(angle);
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.font = "bold 7px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(ball.name.length > 4 ? ball.name.slice(0, 4) : ball.name, 0, 0);
-        ctx.restore();
-
-        // Winner highlight ring + name above (no rotation)
-        if (isWin) {
-          ctx.shadowColor = "#fbbf24";
-          ctx.shadowBlur = 12;
-          ctx.beginPath();
-          ctx.arc(x, sY, BALL_RADIUS + 8, 0, Math.PI * 2);
-          ctx.strokeStyle = "#fbbf24";
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-
-          ctx.fillStyle = "#fbbf24";
-          ctx.font = "bold 12px sans-serif";
-          ctx.textAlign = "center";
-          const nm = ball.name.length > 7 ? ball.name.slice(0, 7) + "…" : ball.name;
-          ctx.fillText(nm, x, sY - BALL_RADIUS - 12);
-        }
-      }
-
-      // Progress bar (right edge)
-      ctx.fillStyle = "rgba(30,41,59,0.5)";
-      ctx.fillRect(WIDTH - 7, 10, 3, CANVAS_HEIGHT - 20);
-      if (active.length > 0 && finishY > 0) {
-        const maxBallY = Math.max(...active.map((b) => b.body.position.y));
-        const progress = Math.min(1, maxBallY / finishY);
-        ctx.shadowColor = "#38bdf8";
-        ctx.shadowBlur = 3;
-        ctx.fillStyle = "#38bdf8";
-        ctx.fillRect(WIDTH - 7, 10, 3, (CANVAS_HEIGHT - 20) * progress);
-        ctx.shadowBlur = 0;
-      }
-
-      animId = requestAnimationFrame(render);
+      animationRef.current = requestAnimationFrame(render);
     };
 
     render();
-    return () => cancelAnimationFrame(animId);
-  }, [started, winner, candidates, onResult]);
+    return () => cancelAnimationFrame(animationRef.current);
+  }, [phase, winner]);
+
+  useEffect(() => stopEngine, [stopEngine]);
 
   useEffect(() => {
-    return () => {
-      if (runnerRef.current) Matter.Runner.stop(runnerRef.current);
-      if (engineRef.current) Matter.Engine.clear(engineRef.current);
+    if (phase !== "racing") return;
+
+    const checkFinish = () => {
+      if (resolvedRef.current) return;
+      const finisher = marblesRef.current.find(
+        (marble) => marble.body.position.y >= FINISH_Y
+      );
+      if (finisher) finishRace(finisher);
     };
-  }, []);
+
+    const engine = engineRef.current;
+    if (!engine) return;
+    Matter.Events.on(engine, "afterUpdate", checkFinish);
+    return () => Matter.Events.off(engine, "afterUpdate", checkFinish);
+  }, [finishRace, phase]);
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="h-7 flex items-center justify-center">
-        {winner ? (
-          <span className="text-lg font-bold text-amber-400">{winner}</span>
-        ) : status ? (
-          <span className="text-sm font-medium text-muted">{status}</span>
-        ) : (
-          <span className="text-sm text-muted">마블 레이스!</span>
-        )}
+    <div className="flex w-full max-w-[390px] flex-col items-center gap-4">
+      <div className="w-full rounded-2xl border border-border bg-surface px-4 py-3 shadow-sm">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-semibold text-foreground">
+            {phase === "idle"
+              ? `${racers.length}개 구슬 출전`
+              : phase === "finished"
+                ? "레이스 종료"
+                : "선두 구슬 추적 중"}
+          </span>
+          <span className="tabular-nums text-muted">{progress}%</span>
+        </div>
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-dim">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <div className="mt-3 flex min-h-6 items-center gap-2 overflow-hidden">
+          {phase === "idle" ? (
+            <p className="truncate text-xs text-muted">
+              주변 {candidates.length}곳 중 무작위로 선발했어요
+            </p>
+          ) : (
+            leaders.map((leader, index) => (
+              <div
+                key={leader.restaurant.placeId}
+                className="flex min-w-0 items-center gap-1.5 rounded-full bg-surface-dim px-2 py-1"
+              >
+                <span className="text-[10px] font-bold text-muted">
+                  {index + 1}
+                </span>
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: leader.color }}
+                />
+                <span className="max-w-16 truncate text-[11px] font-medium">
+                  {shortName(leader.restaurant.name, 6)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-2xl border border-border shadow-lg">
-        <canvas ref={canvasRef} width={WIDTH} height={CANVAS_HEIGHT} />
-        {!started && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 backdrop-blur-sm">
-            <p className="text-lg font-bold text-white">{ballCount}개 구슬 레이스</p>
-            <p className="text-xs text-white/70">가장 먼저 결승선을 통과하는 구슬이 당첨!</p>
+      <div className="relative aspect-[17/26] w-full max-w-[340px] overflow-hidden rounded-[28px] border border-slate-700 bg-slate-950 shadow-2xl shadow-slate-950/20">
+        <canvas
+          ref={canvasRef}
+          className="h-full w-full"
+          role="img"
+          aria-label="음식점 구슬들이 장애물 코스를 달리는 마블 레이스"
+        />
+
+        {phase === "idle" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/45 px-8 text-center backdrop-blur-[2px]">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-sky-300/30 bg-sky-400/10 shadow-[0_0_30px_rgba(56,189,248,0.22)]">
+              <svg viewBox="0 0 48 48" className="h-9 w-9 text-sky-300" fill="none">
+                <circle cx="12" cy="10" r="4" fill="currentColor" />
+                <circle cx="28" cy="8" r="4" fill="currentColor" opacity=".8" />
+                <circle cx="38" cy="20" r="4" fill="currentColor" opacity=".6" />
+                <path
+                  d="M8 21h24L16 40h24"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <p className="text-xl font-extrabold text-white">누가 먼저 도착할까?</p>
+            <p className="mt-2 text-sm leading-5 text-slate-300">
+              구슬 하나가 음식점 하나예요.
+              <br />
+              결승선을 먼저 통과하면 오늘의 메뉴!
+            </p>
+            <button
+              type="button"
+              onClick={startRace}
+              className="mt-6 w-full rounded-full bg-primary px-8 py-3.5 text-base font-bold text-white shadow-lg shadow-orange-950/30 transition-all hover:bg-primary-hover active:scale-[0.98]"
+            >
+              레이스 시작
+            </button>
+          </div>
+        )}
+
+        {phase === "finished" && winner && (
+          <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-amber-300/30 bg-slate-950/90 p-4 text-center shadow-[0_0_30px_rgba(251,191,36,0.22)] backdrop-blur">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-300">
+              Winner
+            </p>
+            <p className="mt-1 truncate text-lg font-extrabold text-white">
+              {winner.name}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">결과 화면으로 이동할게요</p>
           </div>
         )}
       </div>
 
-      <button
-        onClick={startGame}
-        disabled={started}
-        className="rounded-full bg-primary px-10 py-3.5 text-base font-bold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50 disabled:hover:shadow-md"
-      >
-        {started ? (winner ? "결과 확인 중..." : "레이스 중...") : "출발!"}
-      </button>
+      <div className="grid w-full grid-cols-2 gap-2 rounded-2xl border border-border bg-surface p-3">
+        {racers.map((restaurant, index) => (
+          <div
+            key={restaurant.placeId}
+            className="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5"
+          >
+            <span
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-extrabold text-white shadow-sm"
+              style={{ backgroundColor: COLORS[index % COLORS.length] }}
+            >
+              {index + 1}
+            </span>
+            <span className="truncate text-xs font-medium">{restaurant.name}</span>
+          </div>
+        ))}
+      </div>
+
+      {phase !== "idle" && (
+        <div className="w-full rounded-full bg-surface-dim px-8 py-3 text-center text-sm font-semibold text-muted">
+          {phase === "racing" ? "레이스 진행 중" : "우승자 확인 중"}
+        </div>
+      )}
     </div>
   );
 }

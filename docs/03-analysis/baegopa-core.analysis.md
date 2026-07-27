@@ -1,5 +1,7 @@
 # Gap Analysis: baegopa-core (배고파 MVP)
 
+> 이 문서는 v0.1.0 구현 당시의 역사적 분석입니다. 현재 구조는 루트 `README.md`와 `CLAUDE.md`를 기준으로 합니다.
+
 ## Summary
 
 | 항목 | 값 |

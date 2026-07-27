@@ -22,7 +22,7 @@
   --color-surface-dim: var(--surface-dim);
   --color-muted: var(--muted);
   --color-border: var(--border);
-  --font-sans: var(--font-pretendard), var(--font-geist);
+  --font-sans: var(--font-pretendard);
 }
 
 @media (prefers-color-scheme: dark) {

@@ -1,5 +1,7 @@
 # Design: baegopa-core (배고파 MVP)
 
+> 이 문서는 v0.1.0 초기 MVP의 역사적 설계입니다. 현재 구조는 루트 `README.md`와 `CLAUDE.md`를 기준으로 합니다.
+
 ## Executive Summary
 
 | 항목 | 내용 |

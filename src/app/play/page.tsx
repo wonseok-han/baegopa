@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { PinballGame } from "@/components/games/pinball";
 import { useNearbyPlaces } from "@/hooks/use-nearby-places";
-import { GAMES, getRandomGame } from "@/lib/game-registry";
-import { GameIcon, DiceIcon } from "@/components/ui/game-icons";
-import type { GameMeta, Restaurant } from "@/types";
+import type { Restaurant } from "@/types";
 
 function PlayContent() {
   const searchParams = useSearchParams();
@@ -14,14 +13,6 @@ function PlayContent() {
   const lat = searchParams.get("lat");
   const lng = searchParams.get("lng");
   const radius = searchParams.get("radius") || "1000";
-  const gameId = searchParams.get("gameId");
-
-  const [selectedGame, setSelectedGame] = useState<GameMeta | null>(() => {
-    if (gameId) {
-      return GAMES.find((g) => g.id === gameId) || null;
-    }
-    return null;
-  });
 
   useEffect(() => {
     if (lat && lng) {
@@ -38,11 +29,10 @@ function PlayContent() {
         distance: String(selected.distance),
         address: selected.address,
         ...(selected.placeUrl ? { placeUrl: selected.placeUrl } : {}),
-        ...(selectedGame ? { gameId: selectedGame.id } : {}),
       });
       router.push(`/result?${params.toString()}`);
     },
-    [router, selectedGame]
+    [router]
   );
 
   if (loading) {
@@ -107,70 +97,22 @@ function PlayContent() {
     );
   }
 
-  if (!selectedGame) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-8 p-8">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold">게임을 골라봐</h2>
-          <p className="mt-1 text-sm text-muted">
-            {restaurants.length}개 음식점 중 하나를 뽑아줄게
-          </p>
-        </div>
-
-        <div className="grid w-full max-w-xs grid-cols-2 gap-3">
-          {GAMES.map((game) => (
-            <button
-              key={game.id}
-              onClick={() => setSelectedGame(game)}
-              className="group flex flex-col items-center gap-3 rounded-2xl border border-border bg-surface p-6 shadow-sm transition-all hover:border-primary hover:shadow-md active:scale-[0.97]"
-            >
-              <div className="rounded-xl bg-primary-light p-3 text-primary transition-colors group-hover:bg-primary group-hover:text-white">
-                <GameIcon name={game.icon} className="h-7 w-7" />
-              </div>
-              <div className="text-center">
-                <span className="block text-sm font-semibold">
-                  {game.name}
-                </span>
-                <span className="block text-xs text-muted">
-                  {game.description}
-                </span>
-              </div>
-            </button>
-          ))}
-          <button
-            onClick={() => setSelectedGame(getRandomGame())}
-            className="group col-span-2 flex items-center justify-center gap-3 rounded-2xl border border-dashed border-border bg-surface-dim p-4 transition-all hover:border-primary hover:bg-primary-light active:scale-[0.97]"
-          >
-            <div className="text-muted transition-colors group-hover:text-primary">
-              <DiceIcon className="h-5 w-5" />
-            </div>
-            <span className="text-sm font-semibold text-muted group-hover:text-primary">
-              랜덤으로 고르기
-            </span>
-          </button>
-        </div>
-
-        <button
-          onClick={() => router.push("/")}
-          className="text-sm text-muted transition-colors hover:text-foreground"
-        >
-          처음으로
-        </button>
-      </div>
-    );
-  }
-
-  const GameComponent = selectedGame.component;
-
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-      <h2 className="text-lg font-bold">{selectedGame.name}</h2>
-      <GameComponent candidates={restaurants} onResult={handleResult} />
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 overflow-hidden px-4 py-6">
+      <div className="text-center">
+        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">
+          오늘의 레이스
+        </p>
+        <h1 className="mt-1 text-2xl font-extrabold tracking-tight">
+          배고파 마블런
+        </h1>
+      </div>
+      <PinballGame candidates={restaurants} onResult={handleResult} />
       <button
-        onClick={() => setSelectedGame(null)}
+        onClick={() => router.push("/")}
         className="text-sm text-muted transition-colors hover:text-foreground"
       >
-        다른 게임 선택
+        위치 다시 설정
       </button>
     </div>
   );
