@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Matter from "matter-js";
+import { createPinballClock } from "@/lib/pinball-clock";
 import type { GameProps, Restaurant } from "@/types";
 
 import {
@@ -56,6 +57,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
   const marbleByBodyRef = useRef(new Map<number, Marble>());
   const featuredMarblesRef = useRef(new Set<string>());
   const particlesRef = useRef<Particle[]>([]);
+  const bumperGlowRef = useRef(new Map<number, number>());
+  const leadLabelIdsRef = useRef(new Set<string>());
+  const lastBumperToneRef = useRef(0);
   const cameraYRef = useRef(0);
   const resolvedRef = useRef(false);
   const animationRef = useRef<number>(0);
@@ -150,7 +154,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     const advance = () => {
       const race = raceRef.current;
       if (!race || generation !== generationRef.current) return;
-      const selected = race.step(90);
+      // Keep skip/reduced-motion responsive even with hundreds of marbles.
+      const batchSize = Math.max(4, Math.min(90, Math.floor(3000 / race.marbles.length)));
+      const selected = race.step(batchSize);
       if (selected) finishRace(selected);
       else timersRef.current.push(setTimeout(advance, 0));
     };
@@ -171,6 +177,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     advancingRef.current = false;
     cameraYRef.current = 0;
     particlesRef.current = [];
+    bumperGlowRef.current.clear();
+    leadLabelIdsRef.current.clear();
+    lastBumperToneRef.current = 0;
     const seed = crypto.getRandomValues(new Uint32Array(1))[0];
     const race = createPinballRace(racers, seed);
     raceRef.current = race;
@@ -186,7 +195,18 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       if (advancingRef.current || resolvedRef.current) return;
       for (const pair of event.pairs) {
         const marble = marbleByBodyRef.current.get(pair.bodyA.id) ?? marbleByBodyRef.current.get(pair.bodyB.id);
-        if (!marble || Math.hypot(marble.body.velocity.x, marble.body.velocity.y) < 2.2 || particlesRef.current.length > 90) continue;
+        if (!marble) continue;
+        const obstacle = pair.bodyA === marble.body ? pair.bodyB : pair.bodyA;
+        const impactSpeed = Math.hypot(marble.body.velocity.x, marble.body.velocity.y);
+        if (obstacle.label === "bumper") {
+          bumperGlowRef.current.set(obstacle.id, 1);
+          const now = performance.now();
+          if (now - lastBumperToneRef.current > 100) {
+            lastBumperToneRef.current = now;
+            playTone(280 + Math.min(impactSpeed, 8) * 45, 0.045);
+          }
+        }
+        if (impactSpeed < 1.4 || particlesRef.current.length > 90) continue;
         for (let index = 0; index < 4; index++) particlesRef.current.push({
           x: marble.body.position.x, y: marble.body.position.y,
           vx: (Math.random() - 0.5) * 3.6, vy: (Math.random() - 0.5) * 3.6, life: 1, color: marble.color,
@@ -198,17 +218,12 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       if (generation !== generationRef.current || advancingRef.current) return;
       setPhase("racing");
       setAnnouncement("먼저 도착하는 음식점으로!");
-      let last = performance.now();
-      let accumulator = 0;
+      const clock = createPinballClock(FIXED_STEP_MS);
+      clock.reset(performance.now());
       const frame = (now: number) => {
         if (generation !== generationRef.current || advancingRef.current || resolvedRef.current) return;
-        // Fixed simulation steps; frame rate and skip affect only presentation speed.
-        accumulator += Math.min(now - last, 100) * 3;
-        last = now;
-        while (accumulator >= FIXED_STEP_MS && !race.winner) {
-          race.step();
-          accumulator -= FIXED_STEP_MS;
-        }
+        // One second on screen is one second of physics. Skip uses the same steps.
+        clock.advance(now, () => Boolean(race.step()));
         if (race.winner) finishRace(race.winner);
         else physicsFrameRef.current = requestAnimationFrame(frame);
       };
@@ -311,6 +326,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
               .slice(0, 12)
               .map((marble) => marble.restaurant.placeId)
           );
+          leadLabelIdsRef.current = new Set(sorted.slice(0, 3).map((marble) => marble.restaurant.placeId));
           setLeaders(sorted.slice(0, 3));
           setProgress(Math.min(99, Math.round((leadY / FINISH_Y) * 100)));
 
@@ -369,6 +385,15 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         }
 
         if (body.label === "bumper") {
+          const glow = bumperGlowRef.current.get(body.id) ?? 0;
+          if (glow > 0.02) {
+            context.beginPath();
+            context.arc(body.position.x, screenY, (body.circleRadius ?? 30) + 5 + (1 - glow) * 12, 0, Math.PI * 2);
+            context.strokeStyle = `rgba(232,93,36,${glow * 0.65})`;
+            context.lineWidth = 3 * glow;
+            context.stroke();
+            bumperGlowRef.current.set(body.id, glow * 0.88);
+          } else bumperGlowRef.current.delete(body.id);
           context.shadowColor = "rgba(169, 68, 27, 0.25)";
           context.shadowBlur = 12;
           context.shadowOffsetY = 4;
@@ -409,6 +434,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         if (body.label === "spinner") {
           context.fillStyle = "#168c82";
           context.strokeStyle = "#0e514d";
+        } else if (body.label === "deflector") {
+          context.fillStyle = "#edb449";
+          context.strokeStyle = "#966223";
         } else if (body.label === "gate") {
           context.fillStyle = "#e2ae4e";
           context.strokeStyle = "#7f5426";
@@ -424,6 +452,22 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         context.stroke();
         context.shadowBlur = 0;
         context.shadowOffsetY = 0;
+        if (body.label === "deflector") {
+          context.save();
+          context.translate(body.position.x, screenY);
+          context.rotate(body.angle);
+          context.strokeStyle = "rgba(112,68,26,0.5)";
+          context.lineWidth = 2;
+          const direction = body.angle > 0 ? 1 : -1;
+          for (const offset of [-22, 0, 22]) {
+            context.beginPath();
+            context.moveTo(offset - direction * 4, -4);
+            context.lineTo(offset + direction * 2, 0);
+            context.lineTo(offset - direction * 4, 4);
+            context.stroke();
+          }
+          context.restore();
+        }
       }
 
       const finishScreenY = FINISH_Y - cameraY;
@@ -524,6 +568,21 @@ export function PinballGame({ candidates, onResult }: GameProps) {
           context.textBaseline = "middle";
           context.fillText(String(marble.number), x, y + 0.5);
           context.textBaseline = "alphabetic";
+        }
+
+        if (leadLabelIdsRef.current.has(marble.restaurant.placeId) && !isWinner) {
+          const labelX = Math.max(52, Math.min(WIDTH - 52, x));
+          const labelY = y - marble.radius - 22;
+          context.fillStyle = "rgba(255,250,240,0.94)";
+          context.strokeStyle = marble.color;
+          context.lineWidth = 1.25;
+          drawRoundedRect(context, labelX - 44, labelY, 88, 18, 6);
+          context.fill();
+          context.stroke();
+          context.fillStyle = "#4d2f20";
+          context.font = "800 10px sans-serif";
+          context.textAlign = "center";
+          context.fillText(shortName(marble.restaurant.name, 7), labelX, labelY + 12);
         }
 
         if (isWinner) {
