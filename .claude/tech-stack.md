@@ -2,10 +2,10 @@
 
 | Layer | Choice |
 |---|---|
-| **Framework** | Next.js 15 (App Router, TypeScript) |
+| **Framework** | Next.js 16 (App Router, TypeScript) |
 | **Styling** | Tailwind CSS 4 |
 | **Animation** | Framer Motion (전환/연출) + Canvas API (게임별) |
-| **Physics (선택)** | Matter.js (핀볼 등 물리 기반 게임 시) |
+| **Physics** | Matter.js (플링코/마블 레이스) |
 | **Maps/Places** | Kakao 로컬 REST API (카테고리 검색) |
 | **Geolocation** | Browser Geolocation API |
 | **Package Manager** | pnpm |
@@ -22,24 +22,17 @@
 
 > Kakao 로컬 API: 30만 건/일 무료. 한국 음식점 데이터 우수. FD6(음식점), CE7(카페) 카테고리 코드 사용.
 
-### 미니게임 후보 & 기술
+### 게임
 
-| 게임 | 기술 | 난이도 |
-|---|---|---|
-| 룰렛 (회전판) | CSS transform + transition | 낮음 |
-| 슬롯머신 | CSS animation / Framer Motion | 낮음 |
-| 핀볼 | Matter.js (물리 엔진) | 높음 |
-| 뽑기 (가챠) | Framer Motion 연출 | 중간 |
-| 사다리타기 | Canvas 2D | 중간 |
-
-> 미니게임은 플러그인 패턴으로 구현 — 공통 인터페이스(`GameProps: { candidates, onResult }`)를 정의하고 각 게임이 이를 구현.
+Matter.js 물리와 Canvas 2D 렌더링을 결합한 플링코/마블 레이스 하나를 제공한다.
+전체 음식점에서 최대 12개를 무작위 선발하고 `placeId` 기준으로 우승자를 추적한다.
 
 ### 아키텍처
 
 ```
 [Browser]
   ├── Geolocation API → 사용자 위치 획득
-  ├── Next.js Pages → UI (게임 선택 + 미니게임 + 결과)
+  ├── Next.js Pages → UI (위치 설정 + 마블런 + 결과)
   └── fetch → /api/places (Next.js API Route)
                 └── Kakao 로컬 REST API (서버 프록시)
 ```

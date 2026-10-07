@@ -1,22 +1,99 @@
 name: CI
+run-name: 'Manual CI for PR #${{ inputs.pr_number }} at ${{ inputs.head_sha }}'
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository PR number
+        required: true
+        type: string
+      head_branch:
+        description: Exact PR head branch (used to cancel older runs)
+        required: true
+        type: string
+      head_sha:
+        description: Exact current PR HEAD (full lowercase 40-character SHA)
+        required: true
+        type: string
+
+permissions: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: manual-ci-${{ github.repository }}-${{ inputs.head_branch }}
   cancel-in-progress: true
 
 jobs:
+  validate:
+    name: Validate manual PR target
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      head_sha: ${{ steps.target.outputs.head_sha }}
+      base_branch: ${{ steps.target.outputs.base_branch }}
+    steps:
+      # Never check out or execute PR code in this API-token job.
+      - name: Validate trusted workflow ref and current PR HEAD
+        id: target
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_BRANCH: ${{ inputs.head_branch }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        with:
+          script: |
+            const { PR_NUMBER, HEAD_BRANCH, HEAD_SHA } = process.env;
+            const fail = (message) => { throw new Error(message); };
+            if (!['refs/heads/develop', 'refs/heads/main'].includes(context.ref)) {
+              fail('Run the reviewed workflow from develop or main, not a PR branch or tag.');
+            }
+            if (!/^[1-9]\d*$/.test(PR_NUMBER) || !Number.isSafeInteger(Number(PR_NUMBER))) {
+              fail('pr_number must be a positive integer.');
+            }
+            if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
+              fail('head_sha must be a full lowercase 40-character commit SHA.');
+            }
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: Number(PR_NUMBER),
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.state !== 'open' || pr.merged) fail('The PR must still be open.');
+            if (pr.head.repo?.full_name !== repository || pr.base.repo?.full_name !== repository) {
+              fail('Only trusted same-repository PRs are supported; fork code is not run.');
+            }
+            if (!['develop', 'main'].includes(pr.base.ref)) {
+              fail('The PR base must be develop or main.');
+            }
+            if (pr.base.ref === 'main' && pr.head.ref !== 'develop') {
+              fail('Only develop-to-main release PRs may target main.');
+            }
+            if (pr.head.ref !== HEAD_BRANCH || pr.head.sha !== HEAD_SHA) {
+              fail('The PR head branch/SHA changed or does not match the inputs. Dispatch again with the current HEAD.');
+            }
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_branch', pr.base.ref);
+
   check:
     name: typecheck / lint / build
+    needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
+      - name: Checkout verified exact PR HEAD
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Verify checkout
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -27,19 +104,52 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+          # No shared cache: PR install scripts must not populate a base-ref cache.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
-        run: pnpm exec tsc --noEmit
+      - name: Check (lint, typecheck, tests)
+        run: pnpm check
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Build
+      - name: Build (no service credentials)
         run: pnpm build
         env:
-          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
-          NEXT_PUBLIC_KAKAO_JS_KEY: ${{ secrets.NEXT_PUBLIC_KAKAO_JS_KEY }}
+          KAKAO_REST_API_KEY: ci-placeholder-not-a-real-key
+          NEXT_PUBLIC_KAKAO_JS_KEY: ci-placeholder-not-a-real-key
+
+  confirm-head:
+    name: Confirm tested PR HEAD is still current
+    needs: [validate, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      # A fresh runner keeps this token and verification separate from PR code.
+      - name: Reject a stale result and record the tested SHA
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_BRANCH: ${{ inputs.head_branch }}
+          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          BASE_BRANCH: ${{ needs.validate.outputs.base_branch }}
+        with:
+          script: |
+            const { PR_NUMBER, HEAD_BRANCH, HEAD_SHA, BASE_BRANCH } = process.env;
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: Number(PR_NUMBER),
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.state !== 'open' || pr.merged ||
+                pr.head.repo?.full_name !== repository || pr.base.repo?.full_name !== repository ||
+                pr.head.ref !== HEAD_BRANCH || pr.head.sha !== HEAD_SHA || pr.base.ref !== BASE_BRANCH) {
+              throw new Error('The PR changed while CI ran. Dispatch a fresh run for its current HEAD.');
+            }
+            await core.summary
+              .addHeading('Manual CI passed for the requested PR HEAD')
+              .addRaw(`PR #${PR_NUMBER}; tested commit: ${HEAD_SHA}\n\n`)
+              .addRaw(`Workflow ref: ${context.ref}; workflow event SHA: ${context.sha}\n\n`)
+              .addRaw('A manual run can attach its checks to the workflow ref instead of the tested PR HEAD. Verify existing required checks on the PR separately; do not bypass or weaken branch protection. Recheck the PR HEAD immediately before an authorized merge.')
+              .write();

@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  consumeRateLimit,
+  getClientIdentifier,
+  parseSearchParams,
+} from "@/lib/api-guard";
 
 const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY;
+const RATE_LIMIT = 45;
+const RATE_WINDOW_MS = 60_000;
+const UPSTREAM_TIMEOUT_MS = 7_000;
 
 interface KakaoKeywordResult {
   place_name: string;
@@ -18,46 +26,84 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get("query");
-
-  if (!query || query.trim().length < 2) {
+  const parsed = parseSearchParams(request.nextUrl.searchParams);
+  if (!parsed.ok) {
     return NextResponse.json(
-      { error: "검색어는 2글자 이상 입력해주세요" },
+      { error: parsed.error },
       { status: 400 }
     );
   }
 
-  const page = searchParams.get("page") || "1";
-
-  const params = new URLSearchParams({
-    query: query.trim(),
-    size: "15",
-    page,
-  });
-
-  const res = await fetch(
-    `https://dapi.kakao.com/v2/local/search/keyword.json?${params}`,
-    {
-      headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` },
-    }
+  const clientId = getClientIdentifier(request.headers);
+  const rateLimit = consumeRateLimit(
+    `search:${clientId}`,
+    RATE_LIMIT,
+    RATE_WINDOW_MS
   );
+  const rateHeaders = {
+    "X-RateLimit-Limit": String(RATE_LIMIT),
+    "X-RateLimit-Remaining": String(rateLimit.remaining),
+  };
 
-  if (!res.ok) {
+  if (!rateLimit.allowed) {
     return NextResponse.json(
-      { error: "검색에 실패했습니다" },
-      { status: res.status }
+      { error: "검색 요청이 너무 많습니다. 잠시 후 다시 시도해주세요" },
+      {
+        status: 429,
+        headers: {
+          ...rateHeaders,
+          "Retry-After": String(rateLimit.retryAfterSeconds),
+        },
+      }
     );
   }
 
-  const data = await res.json();
-  const results = (data.documents as KakaoKeywordResult[]).map((d) => ({
-    name: d.place_name,
-    address: d.road_address_name || d.address_name,
-    lat: parseFloat(d.y),
-    lng: parseFloat(d.x),
-  }));
-  const hasMore = !data.meta.is_end;
+  const { query, page } = parsed.value;
 
-  return NextResponse.json({ results, hasMore });
+  const params = new URLSearchParams({
+    query,
+    size: "15",
+    page: String(page),
+  });
+
+  try {
+    const res = await fetch(
+      `https://dapi.kakao.com/v2/local/search/keyword.json?${params}`,
+      {
+        headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` },
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      }
+    );
+
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: "검색에 실패했습니다" },
+        { status: 502, headers: rateHeaders }
+      );
+    }
+
+    const data = await res.json();
+    const results = (data.documents as KakaoKeywordResult[]).map((d) => ({
+      name: d.place_name,
+      address: d.road_address_name || d.address_name,
+      lat: Number(d.y),
+      lng: Number(d.x),
+    }));
+    const hasMore = !data.meta.is_end;
+
+    return NextResponse.json(
+      { results, hasMore },
+      {
+        headers: {
+          ...rateHeaders,
+          "Cache-Control": "private, max-age=30",
+        },
+      }
+    );
+  } catch {
+    return NextResponse.json(
+      { error: "검색 서비스 응답이 지연되고 있습니다" },
+      { status: 504, headers: rateHeaders }
+    );
+  }
 }
