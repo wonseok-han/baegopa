@@ -2,6 +2,7 @@ export interface Restaurant {
   placeId: string;
   name: string;
   category: string;
+  categoryPath?: string;
   distance: number;
   address: string;
   location: { lat: number; lng: number };
