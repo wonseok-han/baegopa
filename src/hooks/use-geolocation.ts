@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getStoredLocation } from "@/lib/storage";
 
 interface GeolocationState {
@@ -10,6 +10,7 @@ interface GeolocationState {
 }
 
 export function useGeolocation() {
+  const requestTokenRef = useRef(0);
   const [state, setState] = useState<GeolocationState>({
     coordinates: null,
     error: null,
@@ -24,15 +25,20 @@ export function useGeolocation() {
     }
   }, []);
 
+  useEffect(() => () => { requestTokenRef.current += 1; }, []);
+
   const reset = useCallback(() => {
+    requestTokenRef.current += 1;
     setState({ coordinates: null, error: null, loading: false });
   }, []);
 
   const setManualCoordinates = useCallback((lat: number, lng: number) => {
+    requestTokenRef.current += 1;
     setState({ coordinates: { lat, lng }, error: null, loading: false });
   }, []);
 
   const requestPermission = useCallback(() => {
+    const requestToken = ++requestTokenRef.current;
     if (!navigator.geolocation) {
       setState((prev) => ({
         ...prev,
@@ -45,6 +51,7 @@ export function useGeolocation() {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        if (requestTokenRef.current !== requestToken) return;
         setState({
           coordinates: {
             lat: position.coords.latitude,
@@ -55,6 +62,7 @@ export function useGeolocation() {
         });
       },
       (err) => {
+        if (requestTokenRef.current !== requestToken) return;
         let message = "위치 정보를 가져올 수 없어요";
         if (err.code === err.PERMISSION_DENIED) {
           message = "위치 권한을 허용해주세요";
