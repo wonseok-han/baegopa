@@ -4,47 +4,67 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Matter from "matter-js";
 import type { GameProps, Restaurant } from "@/types";
 
-const WIDTH = 340;
-const VIEW_HEIGHT = 520;
-const WORLD_HEIGHT = 2100;
-const FINISH_Y = 1960;
-const BALL_RADIUS = 11;
-const MAX_RACERS = 12;
+const WIDTH = 360;
+const VIEW_HEIGHT = 600;
+const WORLD_HEIGHT = 1840;
+const FINISH_Y = 1690;
+const COURSE_CATEGORY = 0x0001;
+const COLLISION_COHORTS = 12;
 
-const COLORS = [
-  "#ff6b35",
-  "#22c55e",
-  "#38bdf8",
-  "#fbbf24",
-  "#a78bfa",
-  "#fb7185",
-  "#2dd4bf",
-  "#60a5fa",
-  "#f472b6",
-  "#a3e635",
-  "#f97316",
-  "#818cf8",
+const PALETTE = [
+  "#e85d24",
+  "#168c82",
+  "#e1a62b",
+  "#3973b9",
+  "#cc4d67",
+  "#7654a8",
+  "#5f8f3c",
+  "#d5762c",
+  "#287e9f",
+  "#a65d3f",
 ];
 
-type RacePhase = "idle" | "racing" | "finished";
+type RacePhase = "lobby" | "countdown" | "racing" | "finished";
+
+interface TrailPoint {
+  x: number;
+  y: number;
+}
 
 interface Marble {
   restaurant: Restaurant;
   body: Matter.Body;
   color: string;
   number: number;
+  radius: number;
+  trail: TrailPoint[];
 }
 
-function pickRacers(candidates: Restaurant[]) {
-  const shuffled = [...candidates];
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  color: string;
+}
+
+function shuffle<T>(items: T[]) {
+  const shuffled = [...items];
   for (let index = shuffled.length - 1; index > 0; index--) {
     const target = Math.floor(Math.random() * (index + 1));
     [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
   }
-  return shuffled.slice(0, MAX_RACERS);
+  return shuffled;
 }
 
-function shortName(name: string, length = 8) {
+function getMarbleRadius(count: number) {
+  if (count <= 16) return 12;
+  if (count <= 40) return 10;
+  return 8;
+}
+
+function shortName(name: string, length = 7) {
   return name.length > length ? `${name.slice(0, length)}…` : name;
 }
 
@@ -58,8 +78,8 @@ function addPegField(
   for (let row = 0; row < rows; row++) {
     const shifted = row % 2 === 1;
     const count = shifted ? columns - 1 : columns;
-    const spacingX = WIDTH / (columns + 1);
-    const startX = shifted ? spacingX * 1.5 : spacingX;
+    const spacingX = (WIDTH - 34) / (columns + 1);
+    const startX = 17 + (shifted ? spacingX * 1.5 : spacingX);
 
     for (let column = 0; column < count; column++) {
       Matter.Composite.add(
@@ -70,7 +90,7 @@ function addPegField(
           5,
           {
             isStatic: true,
-            restitution: 0.82,
+            restitution: 0.78,
             friction: 0,
             label: "peg",
           }
@@ -84,40 +104,95 @@ function addRamp(
   world: Matter.World,
   y: number,
   side: "left" | "right",
-  gap: number
+  gap: number,
+  angle = 0.14
 ) {
   const length = WIDTH - gap;
   const x = side === "left" ? length / 2 : WIDTH - length / 2;
   Matter.Composite.add(
     world,
-    Matter.Bodies.rectangle(x, y, length, 14, {
+    Matter.Bodies.rectangle(x, y, length, 13, {
       isStatic: true,
-      angle: side === "left" ? 0.13 : -0.13,
+      angle: side === "left" ? angle : -angle,
       friction: 0,
       frictionStatic: 0,
-      restitution: 0.35,
-      chamfer: { radius: 7 },
+      restitution: 0.28,
+      chamfer: { radius: 6 },
       label: "ramp",
     })
   );
 }
 
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  context.beginPath();
+  context.roundRect(x, y, width, height, radius);
+}
+
 export function PinballGame({ candidates, onResult }: GameProps) {
-  const racers = useMemo(() => pickRacers(candidates), [candidates]);
+  const racers = useMemo(() => shuffle(candidates), [candidates]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Matter.Engine | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
   const marblesRef = useRef<Marble[]>([]);
+  const marbleByBodyRef = useRef(new Map<number, Marble>());
+  const featuredMarblesRef = useRef(new Set<string>());
+  const particlesRef = useRef<Particle[]>([]);
   const cameraYRef = useRef(0);
   const resolvedRef = useRef(false);
   const animationRef = useRef<number>(0);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const leaderFrameRef = useRef(0);
+  const lastLeaderRef = useRef("");
+  const lastAnnouncementRef = useRef(0);
 
-  const [phase, setPhase] = useState<RacePhase>("idle");
+  const [phase, setPhase] = useState<RacePhase>("lobby");
+  const [countdown, setCountdown] = useState("3");
   const [winner, setWinner] = useState<Restaurant | null>(null);
   const [leaders, setLeaders] = useState<Marble[]>([]);
   const [progress, setProgress] = useState(0);
+  const [announcement, setAnnouncement] = useState("출전 구슬 준비 완료");
+  const [soundEnabled, setSoundEnabled] = useState(false);
+
+  const playTone = useCallback(
+    (frequency: number, duration = 0.08) => {
+      if (!soundEnabled) return;
+      try {
+        const AudioContextClass =
+          window.AudioContext ||
+          (
+            window as typeof window & {
+              webkitAudioContext?: typeof AudioContext;
+            }
+          ).webkitAudioContext;
+        if (!AudioContextClass) return;
+        const audioContext = new AudioContextClass();
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.07, audioContext.currentTime);
+        gain.gain.exponentialRampToValueAtTime(
+          0.001,
+          audioContext.currentTime + duration
+        );
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + duration);
+        oscillator.addEventListener("ended", () => audioContext.close());
+      } catch {
+        // Sound is optional; gameplay continues when audio is unavailable.
+      }
+    },
+    [soundEnabled]
+  );
 
   const stopEngine = useCallback(() => {
     cancelAnimationFrame(animationRef.current);
@@ -131,6 +206,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     if (engineRef.current) {
       Matter.Events.off(engineRef.current, "beforeUpdate");
       Matter.Events.off(engineRef.current, "afterUpdate");
+      Matter.Events.off(engineRef.current, "collisionStart");
       Matter.Engine.clear(engineRef.current);
       engineRef.current = null;
     }
@@ -140,74 +216,104 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     (marble: Marble) => {
       if (resolvedRef.current) return;
       resolvedRef.current = true;
+
       Matter.Body.setVelocity(marble.body, { x: 0, y: 0 });
       Matter.Body.setStatic(marble.body, true);
       setWinner(marble.restaurant);
       setLeaders([marble]);
       setProgress(100);
+      setAnnouncement(`${marble.restaurant.name} 우승!`);
       setPhase("finished");
+      playTone(784, 0.22);
+      navigator.vibrate?.([35, 40, 80]);
 
       const resultTimer = setTimeout(() => onResult(marble.restaurant), 2400);
       timersRef.current.push(resultTimer);
     },
-    [onResult]
+    [onResult, playTone]
   );
 
   const startRace = useCallback(() => {
-    if (phase !== "idle" || !canvasRef.current) return;
+    if (phase !== "lobby" || !canvasRef.current) return;
 
     stopEngine();
     resolvedRef.current = false;
     cameraYRef.current = 0;
     leaderFrameRef.current = 0;
+    lastLeaderRef.current = "";
+    lastAnnouncementRef.current = 0;
+    particlesRef.current = [];
     setWinner(null);
     setLeaders([]);
     setProgress(0);
-    setPhase("racing");
+    setCountdown("3");
+    setAnnouncement("잠시 후 출발합니다");
+    setPhase("countdown");
+    playTone(440);
 
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1.05, scale: 0.001 },
+      gravity: { x: 0, y: 1, scale: 0.00032 },
       positionIterations: 12,
       velocityIterations: 10,
     });
     engineRef.current = engine;
 
     const world = engine.world;
+    const marbleRadius = getMarbleRadius(racers.length);
+    const columnSpacing = marbleRadius * 2 + 1;
+    const rowSpacing =
+      racers.length > 100 ? marbleRadius * 0.65 : columnSpacing;
+    const spawnColumns = Math.max(
+      5,
+      Math.floor((WIDTH - 48) / columnSpacing)
+    );
+    const spawnRows = Math.ceil(racers.length / spawnColumns);
+    const gateY = Math.min(
+      190,
+      38 + spawnRows * rowSpacing + marbleRadius + 8
+    );
+
     Matter.Composite.add(world, [
-      Matter.Bodies.rectangle(-8, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
+      Matter.Bodies.rectangle(2, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
         isStatic: true,
         label: "wall",
       }),
-      Matter.Bodies.rectangle(WIDTH + 8, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
+      Matter.Bodies.rectangle(WIDTH - 2, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
         isStatic: true,
         label: "wall",
       }),
-      Matter.Bodies.rectangle(WIDTH / 2, FINISH_Y + 85, WIDTH, 18, {
+      Matter.Bodies.rectangle(WIDTH / 2, FINISH_Y + 82, WIDTH, 18, {
         isStatic: true,
         label: "floor",
       }),
+      Matter.Bodies.rectangle(WIDTH / 2, FINISH_Y, WIDTH - 36, 6, {
+        isStatic: true,
+        isSensor: true,
+        label: "finish",
+      }),
     ]);
 
-    const gate = Matter.Bodies.rectangle(WIDTH / 2, 128, WIDTH - 24, 12, {
+    const gate = Matter.Bodies.rectangle(WIDTH / 2, gateY, WIDTH - 12, 12, {
       isStatic: true,
       friction: 0,
+      chamfer: { radius: 6 },
       label: "gate",
     });
     Matter.Composite.add(world, gate);
 
-    addPegField(world, 220, 9, 7, 58);
+    addPegField(world, 225, 7, 7, 61);
 
     const bumpers = [
-      { x: 86, y: 790, radius: 28 },
-      { x: 254, y: 790, radius: 28 },
-      { x: 170, y: 900, radius: 34 },
+      { x: 92, y: 690, radius: 29 },
+      { x: 268, y: 690, radius: 29 },
+      { x: 180, y: 790, radius: 37 },
     ];
     bumpers.forEach(({ x, y, radius }) => {
       Matter.Composite.add(
         world,
         Matter.Bodies.circle(x, y, radius, {
           isStatic: true,
-          restitution: 1.08,
+          restitution: 1.04,
           friction: 0,
           label: "bumper",
         })
@@ -216,13 +322,13 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
     const spinners: { body: Matter.Body; speed: number }[] = [];
     [
-      { x: 92, y: 1035, speed: 0.035 },
-      { x: 248, y: 1035, speed: -0.035 },
-      { x: 170, y: 1145, speed: 0.042 },
+      { x: 103, y: 935, speed: 0.032 },
+      { x: 257, y: 935, speed: -0.032 },
+      { x: 180, y: 1045, speed: 0.038 },
     ].forEach(({ x, y, speed }) => {
-      const body = Matter.Bodies.rectangle(x, y, 94, 8, {
+      const body = Matter.Bodies.rectangle(x, y, 104, 9, {
         isStatic: true,
-        restitution: 0.7,
+        restitution: 0.58,
         chamfer: { radius: 4 },
         label: "spinner",
       });
@@ -230,96 +336,134 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       Matter.Composite.add(world, body);
     });
 
-    addRamp(world, 1280, "left", 64);
-    addRamp(world, 1400, "right", 64);
-    addRamp(world, 1520, "left", 58);
-    addPegField(world, 1625, 4, 6, 54);
+    addRamp(world, 1165, "left", 72, 0.16);
+    addRamp(world, 1280, "right", 72, 0.16);
+    addPegField(world, 1395, 3, 6, 59);
 
     Matter.Composite.add(world, [
-      Matter.Bodies.rectangle(70, 1880, 155, 14, {
+      Matter.Bodies.rectangle(76, 1590, 168, 14, {
         isStatic: true,
-        angle: 0.31,
+        angle: 0.3,
         friction: 0,
         chamfer: { radius: 7 },
         label: "funnel",
       }),
-      Matter.Bodies.rectangle(WIDTH - 70, 1880, 155, 14, {
+      Matter.Bodies.rectangle(WIDTH - 76, 1590, 168, 14, {
         isStatic: true,
-        angle: -0.31,
+        angle: -0.3,
         friction: 0,
         chamfer: { radius: 7 },
         label: "funnel",
       }),
     ]);
 
-    const columns = Math.min(6, racers.length);
     const marbles = racers.map((restaurant, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const x =
-        (WIDTH / (columns + 1)) * (column + 1) +
-        (Math.random() - 0.5) * 8;
-      const y = 48 + row * 30;
-      const body = Matter.Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.68,
+      const column = index % spawnColumns;
+      const row = Math.floor(index / spawnColumns);
+      const columnWidth =
+        spawnColumns === 1 ? 0 : (WIDTH - 48) / (spawnColumns - 1);
+      const x = 24 + column * columnWidth + (Math.random() - 0.5) * 1.5;
+      const y = 38 + row * rowSpacing;
+      const cohortCategory = 1 << ((index % COLLISION_COHORTS) + 1);
+      const body = Matter.Bodies.circle(x, y, marbleRadius, {
+        restitution: 0.66,
         friction: 0,
         frictionStatic: 0,
-        frictionAir: 0.009,
+        frictionAir: 0.004,
         density: 0.0012,
-        label: `marble-${restaurant.placeId}`,
+        collisionFilter: {
+          category: cohortCategory,
+          mask: COURSE_CATEGORY | cohortCategory,
+        },
+        label: `marble:${restaurant.placeId}`,
       });
       Matter.Composite.add(world, body);
       return {
         restaurant,
         body,
-        color: COLORS[index % COLORS.length],
+        color: PALETTE[index % PALETTE.length],
         number: index + 1,
+        radius: marbleRadius,
+        trail: [],
       };
     });
     marblesRef.current = marbles;
-
-    let tick = 0;
+    marbleByBodyRef.current = new Map(
+      marbles.map((marble) => [marble.body.id, marble])
+    );
     Matter.Events.on(engine, "beforeUpdate", () => {
-      tick += 1;
       spinners.forEach(({ body, speed }) => Matter.Body.rotate(body, speed));
-
-      if (tick % 75 !== 0) return;
-      marbles.forEach((marble) => {
-        const { x, y } = marble.body.velocity;
-        const speed = Math.hypot(x, y);
-        if (speed < 0.65 && marble.body.position.y < FINISH_Y) {
-          Matter.Body.applyForce(marble.body, marble.body.position, {
-            x: (Math.random() - 0.5) * 0.0012,
-            y: 0.001,
-          });
-        }
-      });
     });
 
-    const gateTimer = setTimeout(() => {
+    Matter.Events.on(engine, "collisionStart", (event) => {
+      for (const pair of event.pairs) {
+        const marbleA = marbleByBodyRef.current.get(pair.bodyA.id);
+        const marbleB = marbleByBodyRef.current.get(pair.bodyB.id);
+        const marble = marbleA ?? marbleB;
+        if (!marble) continue;
+
+        const obstacle = marbleA ? pair.bodyB : pair.bodyA;
+        if (obstacle.label === "finish") {
+          finishRace(marble);
+          break;
+        }
+
+        const speed = Math.hypot(
+          marble.body.velocity.x,
+          marble.body.velocity.y
+        );
+
+        if (speed < 2.2 || particlesRef.current.length > 90) continue;
+
+        for (let index = 0; index < 5; index++) {
+          particlesRef.current.push({
+            x: marble.body.position.x,
+            y: marble.body.position.y,
+            vx: (Math.random() - 0.5) * 3.6,
+            vy: (Math.random() - 0.5) * 3.6,
+            life: 1,
+            color: marble.color,
+          });
+        }
+      }
+    });
+
+    const countdownTwo = setTimeout(() => {
+      setCountdown("2");
+      playTone(494);
+    }, 450);
+    const countdownOne = setTimeout(() => {
+      setCountdown("1");
+      playTone(554);
+    }, 900);
+    const countdownGo = setTimeout(() => {
+      setCountdown("GO!");
+      setAnnouncement("게이트 오픈!");
+      playTone(659, 0.14);
+      navigator.vibrate?.(30);
       Matter.Composite.remove(world, gate);
-      marbles.forEach((marble) => {
-        Matter.Body.applyForce(marble.body, marble.body.position, {
-          x: (Math.random() - 0.5) * 0.0007,
-          y: 0.0003,
-        });
-      });
-    }, 650);
-    timersRef.current.push(gateTimer);
+    }, 1350);
+    const raceStart = setTimeout(() => setPhase("racing"), 1600);
+    timersRef.current.push(
+      countdownTwo,
+      countdownOne,
+      countdownGo,
+      raceStart
+    );
 
     const timeoutTimer = setTimeout(() => {
-      if (resolvedRef.current || marbles.length === 0) return;
-      const leader = [...marbles].sort(
-        (a, b) => b.body.position.y - a.body.position.y
-      )[0];
+      if (resolvedRef.current) return;
+      const leader = marbles.reduce((current, marble) =>
+        marble.body.position.y > current.body.position.y ? marble : current
+      );
       finishRace(leader);
-    }, 28000);
+    }, 30000);
     timersRef.current.push(timeoutTimer);
 
     const runner = Matter.Runner.create();
     runnerRef.current = runner;
     Matter.Runner.run(runner, engine);
-  }, [finishRace, phase, racers, stopEngine]);
+  }, [finishRace, phase, playTone, racers, stopEngine]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -340,7 +484,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       context.closePath();
     };
 
-    const drawCourseLabel = (
+    const drawCourseStamp = (
       label: string,
       y: number,
       cameraY: number,
@@ -348,185 +492,331 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     ) => {
       const screenY = y - cameraY;
       if (screenY < -30 || screenY > VIEW_HEIGHT + 30) return;
-      context.font = "700 10px sans-serif";
-      context.textAlign = "left";
+
+      context.save();
+      context.globalAlpha = 0.68;
       context.fillStyle = color;
-      context.globalAlpha = 0.7;
-      context.fillText(label, 14, screenY);
-      context.globalAlpha = 1;
+      context.font = "800 10px sans-serif";
+      context.textAlign = "left";
+      context.letterSpacing = "1px";
+      context.fillText(label, 24, screenY);
+      context.restore();
     };
 
     const render = () => {
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      const background = context.createLinearGradient(0, 0, 0, VIEW_HEIGHT);
-      background.addColorStop(0, "#091426");
-      background.addColorStop(1, "#050914");
-      context.fillStyle = background;
+
+      const paper = context.createLinearGradient(0, 0, WIDTH, VIEW_HEIGHT);
+      paper.addColorStop(0, "#fbf4e6");
+      paper.addColorStop(1, "#eedfc7");
+      context.fillStyle = paper;
       context.fillRect(0, 0, WIDTH, VIEW_HEIGHT);
+
+      context.fillStyle = "rgba(93, 58, 34, 0.055)";
+      for (let x = 18; x < WIDTH; x += 28) {
+        for (let y = 14; y < VIEW_HEIGHT; y += 28) {
+          context.beginPath();
+          context.arc(x, y, 1, 0, Math.PI * 2);
+          context.fill();
+        }
+      }
 
       const engine = engineRef.current;
       const marbles = marblesRef.current;
-
-      if (!engine || phase === "idle") {
-        context.strokeStyle = "rgba(56, 189, 248, 0.12)";
-        context.lineWidth = 1;
-        for (let y = 24; y < VIEW_HEIGHT; y += 32) {
-          context.beginPath();
-          context.moveTo(0, y);
-          context.lineTo(WIDTH, y);
-          context.stroke();
-        }
+      if (!engine || phase === "lobby") {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
 
-      const sorted = [...marbles].sort(
-        (a, b) => b.body.position.y - a.body.position.y
-      );
-      const leadY = sorted[0]?.body.position.y ?? 0;
+      let leadY = 0;
+      for (const marble of marbles) {
+        leadY = Math.max(leadY, marble.body.position.y);
+      }
       const targetCamera = resolvedRef.current
-        ? FINISH_Y - VIEW_HEIGHT * 0.72
-        : Math.max(0, Math.min(leadY - VIEW_HEIGHT * 0.32, WORLD_HEIGHT - VIEW_HEIGHT));
-      cameraYRef.current += (targetCamera - cameraYRef.current) * 0.055;
+        ? FINISH_Y - VIEW_HEIGHT * 0.7
+        : Math.max(
+            0,
+            Math.min(
+              leadY - VIEW_HEIGHT * 0.34,
+              WORLD_HEIGHT - VIEW_HEIGHT
+            )
+          );
+      cameraYRef.current += (targetCamera - cameraYRef.current) * 0.052;
       const cameraY = cameraYRef.current;
 
-      if (!resolvedRef.current) {
+      if (!resolvedRef.current && phase === "racing") {
         leaderFrameRef.current += 1;
         if (leaderFrameRef.current % 12 === 0) {
+          const sorted = [...marbles].sort(
+            (a, b) => b.body.position.y - a.body.position.y
+          );
+          featuredMarblesRef.current = new Set(
+            sorted
+              .slice(0, 12)
+              .map((marble) => marble.restaurant.placeId)
+          );
           setLeaders(sorted.slice(0, 3));
           setProgress(Math.min(99, Math.round((leadY / FINISH_Y) * 100)));
+
+          const currentLeader = sorted[0];
+          const now = Date.now();
+          if (
+            currentLeader &&
+            currentLeader.restaurant.placeId !== lastLeaderRef.current &&
+            now - lastAnnouncementRef.current > 1200
+          ) {
+            const wasLeading = lastLeaderRef.current !== "";
+            lastLeaderRef.current = currentLeader.restaurant.placeId;
+            lastAnnouncementRef.current = now;
+            setAnnouncement(
+              wasLeading
+                ? `${shortName(currentLeader.restaurant.name)} 선두 탈환!`
+                : `${shortName(currentLeader.restaurant.name)} 치고 나갑니다`
+            );
+          }
         }
       }
 
-      drawCourseLabel("01  PEG DROP", 190, cameraY, "#38bdf8");
-      drawCourseLabel("02  BUMPER FIELD", 735, cameraY, "#f472b6");
-      drawCourseLabel("03  SPIN ZONE", 980, cameraY, "#fbbf24");
-      drawCourseLabel("04  SWITCHBACK", 1235, cameraY, "#a78bfa");
-      drawCourseLabel("05  FINAL DROP", 1590, cameraY, "#2dd4bf");
+      drawCourseStamp("01  LUCKY PEGS", 190, cameraY, "#a65d3f");
+      drawCourseStamp("02  ORANGE BUMPERS", 625, cameraY, "#d94f24");
+      drawCourseStamp("03  TURNTABLE", 880, cameraY, "#167d73");
+      drawCourseStamp("04  SWITCHBACK", 1110, cameraY, "#7654a8");
+      drawCourseStamp("05  HOME STRETCH", 1350, cameraY, "#3973b9");
 
       for (const body of Matter.Composite.allBodies(engine.world)) {
         if (
           body.label === "wall" ||
           body.label === "floor" ||
-          body.label.startsWith("marble")
+          body.label === "finish" ||
+          body.label.startsWith("marble:")
         ) {
           continue;
         }
 
         const screenY = body.position.y - cameraY;
-        if (screenY < -100 || screenY > VIEW_HEIGHT + 100) continue;
+        if (screenY < -110 || screenY > VIEW_HEIGHT + 110) continue;
 
         if (body.label === "peg") {
-          context.shadowColor = "#38bdf8";
-          context.shadowBlur = 8;
+          context.shadowColor = "rgba(124, 79, 38, 0.22)";
+          context.shadowBlur = 5;
+          context.shadowOffsetY = 2;
           context.beginPath();
           context.arc(body.position.x, screenY, 5, 0, Math.PI * 2);
-          context.fillStyle = "#0e7490";
+          context.fillStyle = "#e2ae4e";
           context.fill();
-          context.strokeStyle = "#67e8f9";
-          context.lineWidth = 1;
+          context.strokeStyle = "#9b6a28";
+          context.lineWidth = 1.25;
           context.stroke();
           context.shadowBlur = 0;
+          context.shadowOffsetY = 0;
+          continue;
+        }
+
+        if (body.label === "bumper") {
+          context.shadowColor = "rgba(169, 68, 27, 0.25)";
+          context.shadowBlur = 12;
+          context.shadowOffsetY = 4;
+          context.beginPath();
+          context.arc(
+            body.position.x,
+            screenY,
+            body.circleRadius ?? 30,
+            0,
+            Math.PI * 2
+          );
+          context.fillStyle = "#e85d24";
+          context.fill();
+          context.strokeStyle = "#7f3520";
+          context.lineWidth = 4;
+          context.stroke();
+          context.beginPath();
+          context.arc(
+            body.position.x,
+            screenY,
+            (body.circleRadius ?? 30) - 10,
+            0,
+            Math.PI * 2
+          );
+          context.strokeStyle = "#ffd08c";
+          context.lineWidth = 3;
+          context.stroke();
+          context.shadowBlur = 0;
+          context.shadowOffsetY = 0;
           continue;
         }
 
         drawPolygon(body, cameraY);
-        if (body.label === "bumper") {
-          context.shadowColor = "#fb7185";
-          context.shadowBlur = 16;
-          context.fillStyle = "#9f1239";
-          context.strokeStyle = "#fda4af";
-        } else if (body.label === "spinner") {
-          context.shadowColor = "#fbbf24";
-          context.shadowBlur = 12;
-          context.fillStyle = "#b45309";
-          context.strokeStyle = "#fde68a";
+        context.shadowColor = "rgba(76, 45, 28, 0.22)";
+        context.shadowBlur = 6;
+        context.shadowOffsetY = 3;
+
+        if (body.label === "spinner") {
+          context.fillStyle = "#168c82";
+          context.strokeStyle = "#0e514d";
         } else if (body.label === "gate") {
-          context.shadowColor = "#38bdf8";
-          context.shadowBlur = 10;
-          context.fillStyle = "#0369a1";
-          context.strokeStyle = "#7dd3fc";
+          context.fillStyle = "#e2ae4e";
+          context.strokeStyle = "#7f5426";
+        } else if (body.label === "funnel") {
+          context.fillStyle = "#3973b9";
+          context.strokeStyle = "#24496e";
         } else {
-          context.shadowColor = "#a78bfa";
-          context.shadowBlur = 9;
-          context.fillStyle = body.label === "funnel" ? "#0f766e" : "#5b21b6";
-          context.strokeStyle =
-            body.label === "funnel" ? "#5eead4" : "#c4b5fd";
+          context.fillStyle = "#7654a8";
+          context.strokeStyle = "#493267";
         }
-        context.lineWidth = 1;
+        context.lineWidth = 2;
         context.fill();
         context.stroke();
         context.shadowBlur = 0;
+        context.shadowOffsetY = 0;
       }
 
       const finishScreenY = FINISH_Y - cameraY;
-      if (finishScreenY > -30 && finishScreenY < VIEW_HEIGHT + 30) {
-        context.setLineDash([9, 5]);
-        context.strokeStyle = "#fbbf24";
-        context.shadowColor = "#fbbf24";
-        context.shadowBlur = 8;
-        context.lineWidth = 3;
-        context.beginPath();
-        context.moveTo(18, finishScreenY);
-        context.lineTo(WIDTH - 18, finishScreenY);
-        context.stroke();
-        context.setLineDash([]);
-        context.shadowBlur = 0;
-        context.fillStyle = "#fde68a";
-        context.font = "800 12px sans-serif";
+      if (finishScreenY > -40 && finishScreenY < VIEW_HEIGHT + 40) {
+        context.fillStyle = "#553321";
+        context.fillRect(18, finishScreenY - 3, WIDTH - 36, 6);
+
+        const tileSize = 12;
+        for (let x = 22; x < WIDTH - 22; x += tileSize) {
+          context.fillStyle =
+            Math.floor(x / tileSize) % 2 === 0 ? "#fff7e8" : "#e85d24";
+          context.fillRect(x, finishScreenY - 7, tileSize, 7);
+          context.fillStyle =
+            Math.floor(x / tileSize) % 2 === 0 ? "#e85d24" : "#fff7e8";
+          context.fillRect(x, finishScreenY, tileSize, 7);
+        }
+        context.fillStyle = "#553321";
+        context.font = "900 12px sans-serif";
         context.textAlign = "center";
-        context.fillText("FINISH", WIDTH / 2, finishScreenY - 12);
+        context.fillText("FINISH", WIDTH / 2, finishScreenY - 17);
       }
 
       for (const marble of marbles) {
         const x = marble.body.position.x;
         const y = marble.body.position.y - cameraY;
-        if (y < -40 || y > VIEW_HEIGHT + 40) continue;
+        if (y < -60 || y > VIEW_HEIGHT + 60) continue;
+
+        const isFeatured = featuredMarblesRef.current.has(
+          marble.restaurant.placeId
+        );
+        if (isFeatured) {
+          marble.trail.push({ x, y: marble.body.position.y });
+          if (marble.trail.length > 6) marble.trail.shift();
+
+          marble.trail.forEach((point, index) => {
+            const trailY = point.y - cameraY;
+            const alpha = ((index + 1) / marble.trail.length) * 0.18;
+            context.globalAlpha = alpha;
+            context.beginPath();
+            context.arc(
+              point.x,
+              trailY,
+              marble.radius * ((index + 1) / marble.trail.length),
+              0,
+              Math.PI * 2
+            );
+            context.fillStyle = marble.color;
+            context.fill();
+          });
+        } else if (marble.trail.length > 0) {
+          marble.trail = [];
+        }
+        context.globalAlpha = 1;
 
         const isWinner =
           winner?.placeId === marble.restaurant.placeId && resolvedRef.current;
-        context.shadowColor = isWinner ? "#fbbf24" : marble.color;
-        context.shadowBlur = isWinner ? 22 : 10;
+        context.shadowColor = isWinner
+          ? "rgba(226, 174, 78, 0.9)"
+          : "rgba(75, 43, 25, 0.3)";
+        context.shadowBlur = isWinner ? 22 : 7;
+        context.shadowOffsetY = isWinner ? 0 : 3;
         context.beginPath();
-        context.arc(x, y, BALL_RADIUS, 0, Math.PI * 2);
+        context.arc(x, y, marble.radius, 0, Math.PI * 2);
         context.fillStyle = marble.color;
         context.fill();
-        context.strokeStyle = isWinner ? "#fde68a" : "rgba(255,255,255,0.75)";
-        context.lineWidth = isWinner ? 3 : 1.5;
+        context.strokeStyle = isWinner ? "#ffd98d" : "#fff8e9";
+        context.lineWidth = isWinner ? 3 : 2;
         context.stroke();
         context.shadowBlur = 0;
+        context.shadowOffsetY = 0;
 
-        const highlight = context.createRadialGradient(
+        const shine = context.createRadialGradient(
           x - 4,
           y - 5,
           1,
           x,
           y,
-          BALL_RADIUS
+          marble.radius
         );
-        highlight.addColorStop(0, "rgba(255,255,255,0.75)");
-        highlight.addColorStop(0.35, "rgba(255,255,255,0.08)");
-        highlight.addColorStop(1, "rgba(0,0,0,0.24)");
-        context.fillStyle = highlight;
+        shine.addColorStop(0, "rgba(255,255,255,0.82)");
+        shine.addColorStop(0.35, "rgba(255,255,255,0.09)");
+        shine.addColorStop(1, "rgba(70,35,18,0.25)");
+        context.fillStyle = shine;
         context.beginPath();
-        context.arc(x, y, BALL_RADIUS - 1, 0, Math.PI * 2);
+        context.arc(
+          x,
+          y,
+          Math.max(1, marble.radius - 1),
+          0,
+          Math.PI * 2
+        );
         context.fill();
 
-        context.fillStyle = "#ffffff";
-        context.font = "800 9px sans-serif";
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.fillText(String(marble.number), x, y + 0.5);
-        context.textBaseline = "alphabetic";
+        if (marble.radius >= 7) {
+          context.fillStyle = "#fffdf7";
+          context.font = `900 ${marble.radius >= 10 ? 9 : 7}px sans-serif`;
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText(String(marble.number), x, y + 0.5);
+          context.textBaseline = "alphabetic";
+        }
 
         if (isWinner) {
-          context.strokeStyle = "#fbbf24";
-          context.lineWidth = 2;
+          context.strokeStyle = "#e2ae4e";
+          context.lineWidth = 2.5;
           context.beginPath();
-          context.arc(x, y, BALL_RADIUS + 9, 0, Math.PI * 2);
+          context.arc(x, y, marble.radius + 9, 0, Math.PI * 2);
           context.stroke();
         }
       }
+
+      const particles = particlesRef.current.filter(
+        (particle) => particle.life > 0
+      );
+      for (const particle of particles) {
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        particle.vx *= 0.94;
+        particle.vy *= 0.94;
+        particle.life = Math.max(0, particle.life - 0.045);
+        context.globalAlpha = Math.max(0, particle.life);
+        context.fillStyle = particle.color;
+        context.beginPath();
+        context.arc(
+          particle.x,
+          particle.y - cameraY,
+          Math.max(0.1, 2.4 * particle.life),
+          0,
+          Math.PI * 2
+        );
+        context.fill();
+      }
+      context.globalAlpha = 1;
+      particlesRef.current = particles.filter((particle) => particle.life > 0);
+
+      const progressHeight = VIEW_HEIGHT - 64;
+      context.fillStyle = "rgba(83, 51, 33, 0.12)";
+      drawRoundedRect(context, WIDTH - 15, 32, 5, progressHeight, 3);
+      context.fill();
+      context.fillStyle = "#e85d24";
+      drawRoundedRect(
+        context,
+        WIDTH - 15,
+        32,
+        5,
+        progressHeight * (Math.min(leadY, FINISH_Y) / FINISH_Y),
+        3
+      );
+      context.fill();
 
       animationRef.current = requestAnimationFrame(render);
     };
@@ -537,144 +827,186 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
   useEffect(() => stopEngine, [stopEngine]);
 
-  useEffect(() => {
-    if (phase !== "racing") return;
-
-    const checkFinish = () => {
-      if (resolvedRef.current) return;
-      const finisher = marblesRef.current.find(
-        (marble) => marble.body.position.y >= FINISH_Y
-      );
-      if (finisher) finishRace(finisher);
-    };
-
-    const engine = engineRef.current;
-    if (!engine) return;
-    Matter.Events.on(engine, "afterUpdate", checkFinish);
-    return () => Matter.Events.off(engine, "afterUpdate", checkFinish);
-  }, [finishRace, phase]);
-
   return (
-    <div className="flex w-full max-w-[390px] flex-col items-center gap-4">
-      <div className="w-full rounded-2xl border border-border bg-surface px-4 py-3 shadow-sm">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-semibold text-foreground">
-            {phase === "idle"
-              ? `${racers.length}개 구슬 출전`
-              : phase === "finished"
-                ? "레이스 종료"
-                : "선두 구슬 추적 중"}
-          </span>
-          <span className="tabular-nums text-muted">{progress}%</span>
-        </div>
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-dim">
-          <div
-            className="h-full rounded-full bg-primary transition-[width] duration-300"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <div className="mt-3 flex min-h-6 items-center gap-2 overflow-hidden">
-          {phase === "idle" ? (
-            <p className="truncate text-xs text-muted">
-              주변 {candidates.length}곳 중 무작위로 선발했어요
-            </p>
-          ) : (
-            leaders.map((leader, index) => (
-              <div
-                key={leader.restaurant.placeId}
-                className="flex min-w-0 items-center gap-1.5 rounded-full bg-surface-dim px-2 py-1"
-              >
-                <span className="text-[10px] font-bold text-muted">
-                  {index + 1}
-                </span>
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: leader.color }}
-                />
-                <span className="max-w-16 truncate text-[11px] font-medium">
-                  {shortName(leader.restaurant.name, 6)}
-                </span>
+    <div className="w-full max-w-[410px]">
+      <div className="overflow-hidden rounded-[34px] border border-[#78472c] bg-[#603821] p-2 shadow-[0_24px_70px_rgba(83,45,24,0.28)]">
+        <div className="relative overflow-hidden rounded-[27px] border border-[#d1b48d] bg-[#f7eddc]">
+          <div className="flex h-14 items-center justify-between border-b border-[#d9c5a7] bg-[#fff8eb]/95 px-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e85d24] text-[11px] font-black text-white shadow-sm">
+                B
               </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="relative aspect-[17/26] w-full max-w-[340px] overflow-hidden rounded-[28px] border border-slate-700 bg-slate-950 shadow-2xl shadow-slate-950/20">
-        <canvas
-          ref={canvasRef}
-          className="h-full w-full"
-          role="img"
-          aria-label="음식점 구슬들이 장애물 코스를 달리는 마블 레이스"
-        />
-
-        {phase === "idle" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/45 px-8 text-center backdrop-blur-[2px]">
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-sky-300/30 bg-sky-400/10 shadow-[0_0_30px_rgba(56,189,248,0.22)]">
-              <svg viewBox="0 0 48 48" className="h-9 w-9 text-sky-300" fill="none">
-                <circle cx="12" cy="10" r="4" fill="currentColor" />
-                <circle cx="28" cy="8" r="4" fill="currentColor" opacity=".8" />
-                <circle cx="38" cy="20" r="4" fill="currentColor" opacity=".6" />
-                <path
-                  d="M8 21h24L16 40h24"
-                  stroke="currentColor"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#a65d3f]">
+                  Baegopa Marble Club
+                </p>
+                <p className="text-xs font-extrabold text-[#4d2f20]">
+                  오늘의 푸드 레이스
+                </p>
+              </div>
             </div>
-            <p className="text-xl font-extrabold text-white">누가 먼저 도착할까?</p>
-            <p className="mt-2 text-sm leading-5 text-slate-300">
-              구슬 하나가 음식점 하나예요.
-              <br />
-              결승선을 먼저 통과하면 오늘의 메뉴!
-            </p>
             <button
               type="button"
-              onClick={startRace}
-              className="mt-6 w-full rounded-full bg-primary px-8 py-3.5 text-base font-bold text-white shadow-lg shadow-orange-950/30 transition-all hover:bg-primary-hover active:scale-[0.98]"
+              onClick={() => setSoundEnabled((enabled) => !enabled)}
+              aria-label={soundEnabled ? "사운드 끄기" : "사운드 켜기"}
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d9c5a7] bg-white/70 text-[#6b4631] transition-colors hover:bg-white"
             >
-              레이스 시작
+              {soundEnabled ? (
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none">
+                  <path
+                    d="M5 9v6h4l5 4V5L9 9H5Zm12.5-.5a5 5 0 010 7"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none">
+                  <path
+                    d="M5 9v6h4l5 4V5L9 9H5Zm12 1 4 4m0-4-4 4"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              )}
             </button>
           </div>
-        )}
 
-        {phase === "finished" && winner && (
-          <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-amber-300/30 bg-slate-950/90 p-4 text-center shadow-[0_0_30px_rgba(251,191,36,0.22)] backdrop-blur">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-300">
-              Winner
-            </p>
-            <p className="mt-1 truncate text-lg font-extrabold text-white">
-              {winner.name}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">결과 화면으로 이동할게요</p>
+          <div className="relative aspect-[3/5] w-full">
+            <canvas
+              ref={canvasRef}
+              className="h-full w-full"
+              role="img"
+              aria-label="음식점 구슬들이 프리미엄 아케이드 코스를 달리는 마블 레이스"
+            />
+
+            {phase !== "lobby" && (
+              <div className="pointer-events-none absolute inset-x-3 top-3 flex items-center justify-between gap-2">
+                <div className="min-w-0 rounded-full border border-[#d9c5a7]/80 bg-[#fff8eb]/92 px-3 py-1.5 shadow-sm backdrop-blur">
+                  <p className="truncate text-[11px] font-extrabold text-[#593723]">
+                    {announcement}
+                  </p>
+                </div>
+                <div className="shrink-0 rounded-full bg-[#593723] px-2.5 py-1.5 text-[10px] font-black tabular-nums text-[#fff8eb]">
+                  {progress}%
+                </div>
+              </div>
+            )}
+
+            {phase === "lobby" && (
+              <div className="absolute inset-0 flex flex-col bg-[linear-gradient(180deg,rgba(255,248,235,0.72),rgba(247,237,220,0.97))] px-5 pb-5 pt-6 backdrop-blur-[1.5px]">
+                <div className="text-center">
+                  <span className="inline-flex rounded-full border border-[#d9c5a7] bg-white/65 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-[#a65d3f]">
+                    {racers.length} Restaurants · All In
+                  </span>
+                  <h2 className="mt-3 text-2xl font-black tracking-tight text-[#4d2f20]">
+                    조회된 음식점 전원 출전!
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-[#896b55]">
+                    주변 {candidates.length}곳이 하나도 빠짐없이
+                    <br />
+                    구슬이 되어 아케이드 코스를 달려요.
+                  </p>
+                </div>
+
+                <div className="mb-2 mt-5 grid grid-cols-2 gap-2">
+                  {racers.slice(0, 8).map((restaurant, index) => (
+                    <div
+                      key={restaurant.placeId}
+                      className="flex min-w-0 items-center gap-2 rounded-xl border border-[#dfcdb3] bg-white/72 px-2.5 py-2 shadow-[0_2px_0_rgba(117,77,49,0.08)]"
+                    >
+                      <span
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-white text-[9px] font-black text-white shadow-sm"
+                        style={{ backgroundColor: PALETTE[index % PALETTE.length] }}
+                      >
+                        {index + 1}
+                      </span>
+                      <span className="truncate text-[11px] font-bold text-[#5b3b29]">
+                        {restaurant.name}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {racers.length > 8 && (
+                  <p className="text-center text-[10px] font-bold text-[#9a765f]">
+                    외 {racers.length - 8}개 음식점도 모두 함께 출발해요
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={startRace}
+                  className="mt-auto w-full rounded-2xl border-b-4 border-[#a33e18] bg-[#e85d24] px-6 py-3.5 text-base font-black text-white shadow-[0_10px_24px_rgba(232,93,36,0.24)] transition-all hover:bg-[#d94f1b] active:translate-y-0.5 active:border-b-2"
+                >
+                  {racers.length}개 구슬 레이스 시작
+                </button>
+              </div>
+            )}
+
+            {phase === "countdown" && (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#4d2f20]/18 backdrop-blur-[1px]">
+                <div className="flex h-28 w-28 items-center justify-center rounded-full border-8 border-[#fff8eb] bg-[#e85d24] text-5xl font-black text-white shadow-[0_14px_0_#a33e18,0_24px_50px_rgba(83,45,24,0.35)]">
+                  {countdown}
+                </div>
+              </div>
+            )}
+
+            {phase === "racing" && leaders.length > 0 && (
+              <div className="pointer-events-none absolute inset-x-3 bottom-3 flex gap-1.5">
+                {leaders.map((leader, index) => (
+                  <div
+                    key={leader.restaurant.placeId}
+                    className={`flex min-w-0 items-center gap-1.5 rounded-xl border px-2 py-1.5 shadow-sm backdrop-blur ${
+                      index === 0
+                        ? "flex-[1.35] border-[#d6a63d] bg-[#fff4d2]/95"
+                        : "flex-1 border-[#d9c5a7] bg-[#fff8eb]/90"
+                    }`}
+                  >
+                    <span className="text-[9px] font-black text-[#8a654d]">
+                      {index + 1}
+                    </span>
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: leader.color }}
+                    />
+                    <span className="truncate text-[10px] font-extrabold text-[#513321]">
+                      {shortName(leader.restaurant.name, index === 0 ? 7 : 4)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {phase === "finished" && winner && (
+              <div className="absolute inset-0 flex items-end bg-[linear-gradient(180deg,transparent_35%,rgba(67,37,20,0.54))] p-4">
+                <div className="w-full rounded-[22px] border border-[#e9c56c] bg-[#fff8eb]/96 p-5 text-center shadow-[0_18px_50px_rgba(63,35,19,0.34)] backdrop-blur">
+                  <div className="mx-auto -mt-11 flex h-14 w-14 items-center justify-center rounded-full border-4 border-[#fff8eb] bg-[#e2ae4e] text-xl shadow-lg">
+                    🏆
+                  </div>
+                  <p className="mt-2 text-[10px] font-black uppercase tracking-[0.24em] text-[#a65d3f]">
+                    Today&apos;s Winner
+                  </p>
+                  <p className="mt-1 truncate text-xl font-black text-[#4d2f20]">
+                    {winner.name}
+                  </p>
+                  <p className="mt-1 text-xs text-[#8a6a54]">
+                    우승 기록을 확인하러 이동할게요
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      <div className="grid w-full grid-cols-2 gap-2 rounded-2xl border border-border bg-surface p-3">
-        {racers.map((restaurant, index) => (
-          <div
-            key={restaurant.placeId}
-            className="flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5"
-          >
-            <span
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-extrabold text-white shadow-sm"
-              style={{ backgroundColor: COLORS[index % COLORS.length] }}
-            >
-              {index + 1}
-            </span>
-            <span className="truncate text-xs font-medium">{restaurant.name}</span>
-          </div>
-        ))}
-      </div>
-
-      {phase !== "idle" && (
-        <div className="w-full rounded-full bg-surface-dim px-8 py-3 text-center text-sm font-semibold text-muted">
-          {phase === "racing" ? "레이스 진행 중" : "우승자 확인 중"}
         </div>
-      )}
+      </div>
+
+      <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#9a765f]">
+        <span>Equal odds</span>
+        <span className="h-1 w-1 rounded-full bg-[#c7a98d]" />
+        <span>Physics race</span>
+        <span className="h-1 w-1 rounded-full bg-[#c7a98d]" />
+        <span>All {racers.length} marbles</span>
+      </div>
     </div>
   );
 }

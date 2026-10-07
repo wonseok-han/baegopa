@@ -98,23 +98,37 @@ function PlayContent() {
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 overflow-hidden px-4 py-6">
-      <div className="text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary">
-          오늘의 레이스
-        </p>
-        <h1 className="mt-1 text-2xl font-extrabold tracking-tight">
-          배고파 마블런
-        </h1>
+    <main className="flex min-h-dvh flex-1 flex-col items-center bg-[radial-gradient(circle_at_top,#fff8eb_0%,#f5ead9_46%,#ead9c3_100%)] px-3 pb-8 pt-4 dark:bg-[radial-gradient(circle_at_top,#2a2018_0%,#17120e_60%,#110d0a_100%)]">
+      <div className="mb-3 flex w-full max-w-[410px] items-center justify-between px-1">
+        <button
+          onClick={() => router.push("/")}
+          aria-label="위치 다시 설정"
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-[#dcc5a8] bg-[#fffaf0]/80 text-[#6d4933] shadow-sm transition-colors hover:bg-white dark:border-[#503e30] dark:bg-[#251d17] dark:text-[#c9ad91]"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none">
+            <path
+              d="m14.5 6-6 6 6 6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <div className="text-center">
+          <p className="text-[9px] font-black uppercase tracking-[0.22em] text-[#b26342]">
+            Baegopa Arcade
+          </p>
+          <h1 className="text-sm font-black tracking-tight text-[#4d2f20] dark:text-[#f3e4d3]">
+            배고파 마블런
+          </h1>
+        </div>
+        <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[#dcc5a8] bg-[#fffaf0]/70 text-[10px] font-black text-[#b26342] dark:border-[#503e30] dark:bg-[#251d17]">
+          {restaurants.length > 999 ? "999+" : restaurants.length}
+        </div>
       </div>
       <PinballGame candidates={restaurants} onResult={handleResult} />
-      <button
-        onClick={() => router.push("/")}
-        className="text-sm text-muted transition-colors hover:text-foreground"
-      >
-        위치 다시 설정
-      </button>
-    </div>
+    </main>
   );
 }
 
