@@ -165,6 +165,7 @@ export async function GET(request: NextRequest) {
         placeId: place.id,
         name: place.place_name,
         category: extractCategory(place.category_name),
+        categoryPath: place.category_name,
         distance: Math.round(dist),
         address: place.road_address_name || place.address_name,
         location: { lat: placeLat, lng: placeLng },
