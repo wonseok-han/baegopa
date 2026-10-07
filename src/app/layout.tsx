@@ -11,7 +11,7 @@ const pretendard = localFont({
 
 export const metadata: Metadata = {
   title: "배고파 — 뭐 먹지?",
-  description: "주변 음식점을 마블런으로 골라주는 위치 기반 선택기",
+  description: "먹고 싶은 음식 종류를 고르고, 주변 음식점을 핀볼로 선택해요",
   icons: {
     icon: "/favicon.svg",
   },

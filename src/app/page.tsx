@@ -1,501 +1,386 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
 import { useGeolocation } from "@/hooks/use-geolocation";
+import { getPlacesRequestKey, useNearbyPlaces } from "@/hooks/use-nearby-places";
+import { FOOD_CATEGORIES, filterRestaurants, getFoodCategory } from "@/lib/food-categories";
 import {
-  getStoredLocation,
-  setStoredLocation,
-  getStoredPlaces,
-  setStoredPlaces,
-  clearAllStorage,
+  getStoredLocation, setStoredLocation, getStoredFoodCategory,
+  setStoredFoodCategory, clearAllStorage,
 } from "@/lib/storage";
-import type { Restaurant } from "@/types";
+import type { FoodCategoryId } from "@/lib/food-categories";
 
 const RADIUS_OPTIONS = [
-  { value: 100, label: "100m" },
-  { value: 300, label: "300m" },
-  { value: 500, label: "500m" },
-  { value: 1000, label: "1km" },
+  { value: 100, label: "100m" }, { value: 300, label: "300m" },
+  { value: 500, label: "500m" }, { value: 1000, label: "1km" },
 ];
-
-const KAKAO_SDK_URL = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${process.env.NEXT_PUBLIC_KAKAO_JS_KEY}&autoload=false`;
+const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2";
+interface SearchPlace { name: string; address: string; lat: number; lng: number }
 
 export default function Home() {
   const router = useRouter();
   const { coordinates, error, loading, requestPermission, reset: resetGeolocation, setManualCoordinates } = useGeolocation();
-  const [radius, setRadius] = useState(() => {
-    const stored = getStoredLocation();
-    return stored ? stored.radius : 100;
-  });
-  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const nearby = useNearbyPlaces();
+  const { fetchPlaces, cancel: cancelPlaces } = nearby;
+  const [radius, setRadius] = useState(100);
+  const [foodCategory, setFoodCategory] = useState<FoodCategoryId>("all");
+  const [showAllCandidates, setShowAllCandidates] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<{ name: string; address: string; lat: number; lng: number }[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchPlace[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchedQuery, setSearchedQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchPage, setSearchPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const placesAbortRef = useRef<AbortController | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
-  const searchListRef = useRef<HTMLUListElement>(null);
   const currentQueryRef = useRef("");
   const [mapReady, setMapReady] = useState(false);
+  const [mapUnavailable, setMapUnavailable] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<kakao.maps.Map | null>(null);
   const circleRef = useRef<kakao.maps.Circle | null>(null);
+  const locationMarkerRef = useRef<kakao.maps.Marker | null>(null);
   const markersRef = useRef<kakao.maps.Marker[]>([]);
+
+  const selectedCategory = getFoodCategory(foodCategory);
+  const requestKey = coordinates ? getPlacesRequestKey(coordinates.lat, coordinates.lng, radius) : null;
+  const queryMatches = requestKey !== null && nearby.requestKey === requestKey;
+  const placesLoading = !!coordinates && (!queryMatches || nearby.loading);
+  const placesError = queryMatches ? nearby.error : null;
+  const candidates = useMemo(
+    () => queryMatches && !nearby.loading && !nearby.error ? filterRestaurants(nearby.restaurants, foodCategory) : [],
+    [queryMatches, nearby.loading, nearby.error, nearby.restaurants, foodCategory]
+  );
+  const readyToPlay = !!coordinates && !placesLoading && !placesError && candidates.length > 0;
+
+  useEffect(() => {
+    const stored = getStoredLocation();
+    // Restore after hydration, so server and first client render match.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (stored) setRadius(stored.radius);
+    setFoodCategory(getFoodCategory(getStoredFoodCategory()).id);
+  }, []);
 
   useEffect(() => {
     if (!coordinates) return;
-    if (document.getElementById("kakao-map-sdk")) {
-      if (window.kakao?.maps) {
-        window.kakao.maps.load(() => setMapReady(true));
-      }
+    setStoredLocation(coordinates.lat, coordinates.lng, radius);
+    // The REST search works even without a map key or a loaded map SDK.
+    void fetchPlaces(coordinates.lat, coordinates.lng, radius);
+    return cancelPlaces;
+  }, [coordinates, radius, fetchPlaces, cancelPlaces]);
+
+  useEffect(() => {
+    if (!coordinates) return;
+    const key = process.env.NEXT_PUBLIC_KAKAO_JS_KEY;
+    if (!key) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMapUnavailable(true);
       return;
     }
-
-    const script = document.createElement("script");
-    script.id = "kakao-map-sdk";
-    script.src = KAKAO_SDK_URL;
-    script.async = true;
-    script.onload = () => {
-      window.kakao.maps.load(() => setMapReady(true));
+    let active = true;
+    const markUnavailable = () => { if (active) setMapUnavailable(true); };
+    const loadMap = () => {
+      if (!window.kakao?.maps) return markUnavailable();
+      window.kakao.maps.load(() => {
+        if (!active) return;
+        clearTimeout(timeout);
+        setMapReady(true);
+        setMapUnavailable(false);
+      });
     };
-    document.head.appendChild(script);
+    const existing = document.getElementById("kakao-map-sdk") as HTMLScriptElement | null;
+    const script = existing ?? document.createElement("script");
+    const timeout = setTimeout(markUnavailable, 10_000);
+    script.addEventListener("load", loadMap);
+    script.addEventListener("error", markUnavailable);
+    if (window.kakao?.maps) loadMap();
+    else if (!existing) {
+      script.id = "kakao-map-sdk";
+      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`;
+      script.async = true;
+      document.head.appendChild(script);
+    }
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      script.removeEventListener("load", loadMap);
+      script.removeEventListener("error", markUnavailable);
+    };
   }, [coordinates]);
 
   useEffect(() => {
     if (!mapReady || !coordinates || !mapContainerRef.current) return;
-
     const position = new kakao.maps.LatLng(coordinates.lat, coordinates.lng);
-
-    if (!mapRef.current) {
-      const map = new kakao.maps.Map(mapContainerRef.current, {
-        center: position,
-        level: radius <= 100 ? 3 : radius <= 300 ? 4 : radius <= 500 ? 5 : 6,
-      });
-
-      new kakao.maps.Marker({
-        map,
-        position,
-        title: "내 위치",
-      });
-
-      mapRef.current = map;
-    }
-
-    if (circleRef.current) {
-      circleRef.current.setMap(null);
-    }
-
-    const circle = new kakao.maps.Circle({
-      center: position,
-      radius,
-      strokeWeight: 2,
-      strokeColor: "#e85d24",
-      strokeOpacity: 0.8,
-      fillColor: "#e85d24",
-      fillOpacity: 0.08,
-    });
-    circle.setMap(mapRef.current);
-    circleRef.current = circle;
-
     const level = radius <= 100 ? 3 : radius <= 300 ? 4 : radius <= 500 ? 5 : 6;
+    if (!mapRef.current) mapRef.current = new kakao.maps.Map(mapContainerRef.current, { center: position, level });
+    locationMarkerRef.current?.setMap(null);
+    locationMarkerRef.current = new kakao.maps.Marker({ map: mapRef.current, position, title: "검색 기준 위치" });
+    circleRef.current?.setMap(null);
+    circleRef.current = new kakao.maps.Circle({
+      center: position, radius, strokeWeight: 2, strokeColor: "#e85d24",
+      strokeOpacity: 0.8, fillColor: "#e85d24", fillOpacity: 0.08,
+    });
+    circleRef.current.setMap(mapRef.current);
     mapRef.current.setLevel(level);
     mapRef.current.setCenter(position);
   }, [mapReady, coordinates, radius]);
 
-  const updateMarkers = useCallback(
-    (list: Restaurant[]) => {
-      if (!mapRef.current) return;
-      markersRef.current.forEach((m) => m.setMap(null));
-      markersRef.current = list.map((r) => {
-        const marker = new kakao.maps.Marker({
-          map: mapRef.current!,
-          position: new kakao.maps.LatLng(r.location.lat, r.location.lng),
-          title: r.name,
-        });
-        return marker;
-      });
-    },
-    []
-  );
-
-  const fetchAndMarkRestaurants = useCallback(async () => {
-    if (!coordinates) return;
-
-    placesAbortRef.current?.abort();
-
-    const cached = getStoredPlaces(coordinates.lat, coordinates.lng, radius);
-    if (cached && cached.length > 0) {
-      setRestaurants(cached);
-      updateMarkers(cached);
-      return;
-    }
-
-    const controller = new AbortController();
-    placesAbortRef.current = controller;
-
-    try {
-      const res = await fetch(
-        `/api/places?lat=${coordinates.lat}&lng=${coordinates.lng}&radius=${radius}`,
-        { signal: controller.signal }
-      );
-      const data = await res.json();
-      if (
-        !controller.signal.aborted &&
-        placesAbortRef.current === controller &&
-        res.ok &&
-        data.restaurants
-      ) {
-        setRestaurants(data.restaurants);
-        setStoredLocation(coordinates.lat, coordinates.lng, radius);
-        setStoredPlaces(coordinates.lat, coordinates.lng, radius, data.restaurants);
-        updateMarkers(data.restaurants);
-      }
-    } catch (requestError) {
-      if (requestError instanceof DOMException && requestError.name === "AbortError") {
-        return;
-      }
-      // silently fail, user can proceed without markers
-    }
-  }, [coordinates, radius, updateMarkers]);
-
   useEffect(() => {
-    if (mapReady && coordinates) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchAndMarkRestaurants();
-    }
-  }, [mapReady, coordinates, radius, fetchAndMarkRestaurants]);
+    if (!mapReady || !mapRef.current) return;
+    markersRef.current.forEach((marker) => marker.setMap(null));
+    markersRef.current = candidates.map((restaurant) => new kakao.maps.Marker({
+      map: mapRef.current!,
+      position: new kakao.maps.LatLng(restaurant.location.lat, restaurant.location.lng),
+      title: restaurant.name,
+    }));
+  }, [mapReady, coordinates, candidates]);
 
-  const handleStart = () => {
-    if (!coordinates) return;
-    setStoredLocation(coordinates.lat, coordinates.lng, radius);
-    router.push(
-      `/play?lat=${coordinates.lat}&lng=${coordinates.lng}&radius=${radius}`
-    );
-  };
-
-  const handleReset = () => {
-    placesAbortRef.current?.abort();
-    searchAbortRef.current?.abort();
+  const cancelSearch = useCallback(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    clearAllStorage();
-    markersRef.current.forEach((m) => m.setMap(null));
-    markersRef.current = [];
-    if (circleRef.current) circleRef.current.setMap(null);
-    circleRef.current = null;
-    mapRef.current = null;
-    setRestaurants([]);
-    setMapReady(false);
-    setRadius(100);
-    setSearchQuery("");
-    setSearchResults([]);
-    setHasMore(false);
-    setSearchPage(1);
-    setShowSearch(false);
-    resetGeolocation();
-  };
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = null;
+    currentQueryRef.current = "";
+    setSearching(false);
+    setLoadingMore(false);
+  }, []);
 
   const fetchSearchResults = useCallback(async (query: string, page: number, append: boolean) => {
     searchAbortRef.current?.abort();
     const controller = new AbortController();
     searchAbortRef.current = controller;
-
     if (append) setLoadingMore(true); else setSearching(true);
+    setSearchError(null);
+    const isCurrent = () => !controller.signal.aborted && searchAbortRef.current === controller && currentQueryRef.current === query;
     try {
-      const res = await fetch(
-        `/api/search?query=${encodeURIComponent(query)}&page=${page}`,
-        { signal: controller.signal }
-      );
+      const res = await fetch(`/api/search?query=${encodeURIComponent(query)}&page=${page}`, { signal: controller.signal });
       const data = await res.json();
-      if (
-        !controller.signal.aborted &&
-        searchAbortRef.current === controller &&
-        currentQueryRef.current === query &&
-        res.ok &&
-        data.results
-      ) {
-        setSearchResults((prev) => append ? [...prev, ...data.results] : data.results);
-        setHasMore(data.hasMore ?? false);
-        setSearchPage(page);
-      }
+      if (!isCurrent()) return;
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "장소를 검색하지 못했어요");
+      if (!Array.isArray(data.results)) throw new Error("검색 결과를 불러오지 못했어요");
+      setSearchResults((prev) => append ? [...prev, ...data.results] : data.results);
+      setHasMore(data.hasMore ?? false);
+      setSearchPage(page);
+      setSearchedQuery(query);
     } catch (requestError) {
-      if (requestError instanceof DOMException && requestError.name === "AbortError") {
-        return;
-      }
-      // silently fail
+      if (!isCurrent()) return;
+      setSearchError(requestError instanceof Error ? requestError.message : "연결을 확인하고 다시 검색해주세요");
     } finally {
-      if (searchAbortRef.current === controller) {
-        setSearching(false);
-        setLoadingMore(false);
-      }
+      if (isCurrent()) { setSearching(false); setLoadingMore(false); }
     }
   }, []);
 
   const handleSearchInput = (value: string) => {
+    cancelSearch();
     setSearchQuery(value);
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchAbortRef.current?.abort();
+    setSearchResults([]);
+    setSearchError(null);
+    setSearchedQuery("");
+    setHasMore(false);
+    setSearchPage(1);
     const normalized = value.trim();
     currentQueryRef.current = normalized;
-    if (normalized.length < 2) {
-      setSearchResults([]);
-      setHasMore(false);
-      setSearching(false);
-      setLoadingMore(false);
-      return;
-    }
-    searchTimerRef.current = setTimeout(() => {
-      fetchSearchResults(normalized, 1, false);
-    }, 300);
+    if (normalized.length < 2) return;
+    setSearching(true);
+    searchTimerRef.current = setTimeout(() => { void fetchSearchResults(normalized, 1, false); }, 300);
   };
 
-  const handleLoadMore = () => {
-    if (loadingMore || !hasMore) return;
-    fetchSearchResults(currentQueryRef.current, searchPage + 1, true);
-  };
-
-  const handleSearchScroll = () => {
-    const el = searchListRef.current;
-    if (!el || loadingMore || !hasMore) return;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 10) {
-      handleLoadMore();
-    }
-  };
-
-  const handleSelectPlace = (place: { name: string; address: string; lat: number; lng: number }) => {
-    searchAbortRef.current?.abort();
+  const handleSelectPlace = (place: SearchPlace) => {
+    cancelSearch();
     setManualCoordinates(place.lat, place.lng);
     setSearchQuery("");
     setSearchResults([]);
+    setSearchError(null);
     setShowSearch(false);
   };
 
-  useEffect(() => {
-    return () => {
-      placesAbortRef.current?.abort();
-      searchAbortRef.current?.abort();
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    };
+  const handleCategory = (category: FoodCategoryId) => {
+    setFoodCategory(category);
+    setStoredFoodCategory(category);
+    setShowAllCandidates(false);
+  };
+
+  const handleReset = () => {
+    cancelPlaces();
+    cancelSearch();
+    clearAllStorage();
+    // A location change should not discard the food choice.
+    setStoredFoodCategory(foodCategory);
+    markersRef.current.forEach((marker) => marker.setMap(null));
+    markersRef.current = [];
+    locationMarkerRef.current?.setMap(null);
+    locationMarkerRef.current = null;
+    circleRef.current?.setMap(null);
+    circleRef.current = null;
+    mapRef.current = null;
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchError(null);
+    setSearchedQuery("");
+    setHasMore(false);
+    setShowSearch(false);
+    setShowAllCandidates(false);
+    resetGeolocation();
+  };
+
+  const handleStart = () => {
+    if (!readyToPlay || !coordinates) return;
+    setStoredLocation(coordinates.lat, coordinates.lng, radius);
+    setStoredFoodCategory(foodCategory);
+    router.push(`/play?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radius: String(radius), foodCategory })}`);
+  };
+
+  useEffect(() => () => {
+    searchAbortRef.current?.abort();
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
   }, []);
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-8 p-6">
-      <div className="text-center">
-        <h1 className="text-5xl font-extrabold tracking-tight text-primary">
-          배고파
-        </h1>
-        <p className="mt-2 text-lg text-muted">뭐 먹지? 게임으로 골라줄게.</p>
-      </div>
+    <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-6 px-5 pb-10 pt-9 sm:px-8">
+      <header className="text-center">
+        <p className="text-[10px] font-bold tracking-[0.24em] text-primary">A LITTLE GAME, A GOOD MEAL</p>
+        <h1 className="mt-2 text-5xl font-extrabold tracking-tight text-primary">배고파</h1>
+        <p className="mt-3 text-sm text-muted">먹고 싶은 음식부터, 마지막 선택은 핀볼로.</p>
+        <ol aria-label="진행 순서" className="mt-5 flex justify-center gap-3 text-xs font-medium text-muted">
+          <li className="text-primary">1 음식 선택</li><li aria-hidden="true">→</li>
+          <li>2 후보 확인</li><li aria-hidden="true">→</li><li>3 핀볼</li>
+        </ol>
+      </header>
 
-      {!coordinates && (
-        <div className="flex w-full max-w-sm flex-col items-center gap-5">
-          <div className="flex w-full gap-1 rounded-full bg-surface-dim p-1">
-            <button
-              onClick={() => setShowSearch(false)}
-              className="relative flex-1 rounded-full py-2.5 text-sm font-medium transition-colors"
-            >
-              {!showSearch && (
-                <motion.span
-                  layoutId="location-tab"
-                  className="absolute inset-0 rounded-full bg-primary shadow-sm"
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
-              <span className={`relative z-10 ${!showSearch ? "text-white" : "text-muted"}`}>
-                내 위치
-              </span>
+      <section aria-labelledby="category-heading" className="rounded-3xl border border-border bg-surface p-4 shadow-sm sm:p-5">
+        <h2 id="category-heading" className="text-base font-bold"><span className="mr-2 text-primary">01</span> 오늘은 뭐가 당겨요?</h2>
+        <p className="mb-4 mt-1 text-xs text-muted">한 가지 골라주세요. 고민되면 전체도 좋아요.</p>
+        <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
+          {FOOD_CATEGORIES.map((category) => (
+            <button key={category.id} type="button" aria-pressed={foodCategory === category.id}
+              onClick={() => handleCategory(category.id)}
+              className={`flex min-h-19 flex-col items-center justify-center gap-1.5 rounded-2xl border px-0.5 py-3 text-[10px] font-semibold transition-colors sm:text-xs ${FOCUS} ${foodCategory === category.id ? "border-primary bg-primary-light text-primary" : "border-transparent bg-surface-dim text-muted hover:border-border hover:text-foreground"}`}>
+              <span aria-hidden="true" className="text-2xl">{category.icon}</span><span>{category.label}</span>
             </button>
-            <button
-              onClick={() => setShowSearch(true)}
-              className="relative flex-1 rounded-full py-2.5 text-sm font-medium transition-colors"
-            >
-              {showSearch && (
-                <motion.span
-                  layoutId="location-tab"
-                  className="absolute inset-0 rounded-full bg-primary shadow-sm"
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
-              <span className={`relative z-10 ${showSearch ? "text-white" : "text-muted"}`}>
-                장소 검색
-              </span>
-            </button>
-          </div>
+          ))}
+        </div>
+      </section>
 
-          <AnimatePresence mode="wait">
+      <section aria-labelledby="candidates-heading" className="flex flex-col gap-4 rounded-3xl border border-border bg-surface p-4 shadow-sm sm:p-5">
+        <div className="flex items-center justify-between gap-2">
+          <h2 id="candidates-heading" className="text-base font-bold"><span className="mr-2 text-primary">02</span> 주변 후보 확인</h2>
+          {coordinates && <button onClick={handleReset} className={`rounded-md px-1 py-2 text-xs text-muted hover:text-foreground ${FOCUS}`}>위치 변경</button>}
+        </div>
+
+        {!coordinates ? (
+          <div className="flex flex-col gap-4">
+            <div aria-label="위치 설정 방법" className="flex gap-1 rounded-full bg-surface-dim p-1">
+              <button aria-pressed={!showSearch} onClick={() => { cancelSearch(); setShowSearch(false); }}
+                className={`flex-1 rounded-full py-2.5 text-sm font-medium ${FOCUS} ${!showSearch ? "bg-primary text-white shadow-sm" : "text-muted"}`}>내 위치</button>
+              <button aria-pressed={showSearch} onClick={() => { resetGeolocation(); setShowSearch(true); if (searchQuery.trim()) handleSearchInput(searchQuery); }}
+                className={`flex-1 rounded-full py-2.5 text-sm font-medium ${FOCUS} ${showSearch ? "bg-primary text-white shadow-sm" : "text-muted"}`}>장소 검색</button>
+            </div>
             {!showSearch ? (
-              <motion.div
-                key="gps"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex w-full flex-col items-center gap-3"
-              >
-                <p className="text-sm text-muted">GPS로 현재 위치를 찾아요</p>
-                <button
-                  onClick={requestPermission}
-                  disabled={loading}
-                  className="w-full rounded-full bg-primary px-8 py-4 text-lg font-semibold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95 disabled:opacity-50"
-                >
-                  {loading ? "위치 찾는 중..." : "내 위치 찾기"}
+              <div className="flex flex-col gap-3 text-center">
+                <p className="text-xs text-muted">현재 위치 근처의 {selectedCategory.label === "전체" ? "음식점" : selectedCategory.label} 후보를 찾아요.</p>
+                <button onClick={requestPermission} disabled={loading}
+                  className={`w-full rounded-2xl bg-primary px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:bg-primary-hover disabled:opacity-50 ${FOCUS}`}>
+                  {loading ? "위치 찾는 중…" : "내 위치로 음식점 찾기"}
                 </button>
-              </motion.div>
+              </div>
             ) : (
-              <motion.div
-                key="search"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="relative w-full"
-              >
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => handleSearchInput(e.target.value)}
-                    placeholder="강남역, 홍대입구, 서울시 마포구..."
-                    className="w-full rounded-2xl border border-border bg-surface px-4 py-3.5 pr-10 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    autoFocus
-                  />
-                  {searching && (
-                    <div className="absolute right-3 top-3.5">
-                      <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="h-4 w-4 rounded-full border-2 border-muted border-t-primary"
-                      />
-                    </div>
-                  )}
-                </div>
-                <AnimatePresence>
-                  {searchResults.length > 0 && (
-                    <motion.ul
-                      ref={searchListRef}
-                      onScroll={handleSearchScroll}
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.15 }}
-                      className="absolute z-10 mt-2 max-h-64 w-full overflow-y-auto overscroll-contain rounded-2xl border border-border bg-surface shadow-xl"
-                    >
-                      {searchResults.map((place, i) => (
-                        <motion.li
-                          key={`${place.lat}-${place.lng}-${i}`}
-                          initial={{ opacity: 0, x: -8 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: Math.min(i, 9) * 0.05 }}
-                        >
-                          <button
-                            onClick={() => handleSelectPlace(place)}
-                            className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-dim"
-                          >
-                            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">
-                              {i + 1}
-                            </span>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-foreground">{place.name}</p>
-                              <p className="truncate text-xs text-muted">{place.address}</p>
-                            </div>
-                          </button>
-                        </motion.li>
-                      ))}
-                      {loadingMore && (
-                        <li className="flex justify-center py-3">
-                          <motion.div
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                            className="h-5 w-5 rounded-full border-2 border-muted border-t-primary"
-                          />
-                        </li>
-                      )}
-                      {!hasMore && searchResults.length >= 15 && (
-                        <li className="py-2 text-center text-xs text-muted">
-                          모든 결과를 불러왔어요
-                        </li>
-                      )}
-                    </motion.ul>
-                  )}
-                </AnimatePresence>
-                {searchQuery.length > 0 && searchQuery.length < 2 && (
-                  <p className="mt-2 text-center text-xs text-muted">2글자 이상 입력해주세요</p>
+              <div>
+                <label htmlFor="place-search" className="sr-only">검색할 장소 또는 주소</label>
+                <input id="place-search" type="search" value={searchQuery} maxLength={80}
+                  onChange={(event) => handleSearchInput(event.target.value)}
+                  placeholder="강남역, 홍대입구, 서울시 마포구…" autoComplete="off"
+                  aria-describedby="search-status"
+                  className={`w-full rounded-2xl border border-border bg-background px-4 py-3.5 text-base placeholder:text-sm placeholder:text-muted ${FOCUS}`} />
+                <p id="search-status" role="status" className="mt-2 text-xs text-muted">
+                  {searching ? "장소 검색 중…" : searchQuery.trim().length < 2 ? "장소나 주소를 2글자 이상 입력해주세요." : searchedQuery === searchQuery.trim() && searchResults.length === 0 ? "검색 결과가 없어요. 다른 장소 이름을 입력해주세요." : "검색 결과에서 기준 위치를 선택해주세요."}
+                </p>
+                {searchError && <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{searchError}</p>}
+                {searchResults.length > 0 && (
+                  <ul aria-label="장소 검색 결과" className="mt-3 max-h-64 divide-y divide-border overflow-y-auto rounded-2xl border border-border">
+                    {searchResults.map((place, index) => (
+                      <li key={`${place.lat}-${place.lng}-${index}`}>
+                        <button onClick={() => handleSelectPlace(place)} className={`w-full px-4 py-3 text-left hover:bg-surface-dim ${FOCUS}`}>
+                          <span className="block text-sm font-medium">{place.name}</span><span className="block text-xs text-muted">{place.address}</span>
+                        </button>
+                      </li>
+                    ))}
+                    {hasMore && <li><button onClick={() => { void fetchSearchResults(currentQueryRef.current, searchPage + 1, true); }} disabled={loadingMore}
+                      className={`w-full py-3 text-sm font-medium text-primary disabled:opacity-50 ${FOCUS}`}>{loadingMore ? "더 불러오는 중…" : "장소 더 보기"}</button></li>}
+                  </ul>
                 )}
-              </motion.div>
+              </div>
             )}
-          </AnimatePresence>
-        </div>
-      )}
-
-      {error && <p className="text-sm text-red-500">{error}</p>}
-
-      {coordinates && (
-        <div className="flex w-full max-w-md flex-col items-center gap-5">
-          <div className="flex w-full items-center justify-between">
-            <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-              위치 확인 완료
-            </div>
-            <button
-              onClick={handleReset}
-              className="text-xs text-muted transition-colors hover:text-foreground"
-            >
-              위치 재설정
-            </button>
+            {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           </div>
-
-          <div
-            ref={mapContainerRef}
-            className="h-52 w-full overflow-hidden rounded-2xl border border-border shadow-sm"
-          />
-
-          {restaurants.length > 0 && (
-            <p className="text-xs text-muted">
-              반경 내 음식점 {restaurants.length}개 발견
-            </p>
-          )}
-
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-sm font-medium text-muted">반경</p>
-            <div className="flex gap-1 rounded-full bg-surface-dim p-1">
-              {RADIUS_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setRadius(opt.value)}
-                  className="relative rounded-full px-5 py-2 text-sm font-medium transition-colors"
-                >
-                  {radius === opt.value && (
-                    <motion.span
-                      layoutId="radius-indicator"
-                      className="absolute inset-0 rounded-full bg-primary shadow-sm"
-                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                    />
-                  )}
-                  <span className={`relative z-10 ${radius === opt.value ? "text-white" : "text-muted hover:text-foreground"}`}>
-                    {opt.label}
-                  </span>
-                </button>
-              ))}
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted">검색 반경</span>
+              <div aria-label="검색 반경" className="flex rounded-full bg-surface-dim p-1">
+                {RADIUS_OPTIONS.map((option) => (
+                  <button key={option.value} aria-pressed={radius === option.value}
+                    onClick={() => { setRadius(option.value); setShowAllCandidates(false); }}
+                    className={`rounded-full px-3 py-2 text-xs font-semibold sm:px-4 ${FOCUS} ${radius === option.value ? "bg-primary text-white shadow-sm" : "text-muted hover:text-foreground"}`}>
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+            <div className="relative overflow-hidden rounded-2xl border border-border bg-surface-dim">
+              <div ref={mapContainerRef} role="img" aria-label="검색 위치와 선택한 음식점 후보 지도" className="h-40 w-full sm:h-44" />
+              {!mapReady && <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-xs text-muted">
+                {mapUnavailable ? "지도를 표시할 수 없어도 아래 후보에서 고를 수 있어요." : "지도 불러오는 중…"}
+              </div>}
+            </div>
+            <div aria-live="polite" aria-busy={placesLoading}>
+              {placesLoading ? <p className="py-5 text-center text-sm text-muted">반경 {radius}m 안의 음식점 찾는 중…</p> : placesError ? (
+                <div className="rounded-2xl bg-surface-dim p-4 text-center">
+                  <p role="alert" className="text-sm">{placesError}</p>
+                  <button onClick={() => { void fetchPlaces(coordinates.lat, coordinates.lng, radius); }} className={`mt-3 rounded-full px-4 py-2 text-sm font-semibold text-primary ${FOCUS}`}>다시 불러오기</button>
+                </div>
+              ) : candidates.length === 0 ? (
+                <div className="rounded-2xl bg-surface-dim p-5 text-center">
+                  <p className="font-semibold">{selectedCategory.label} 후보가 아직 없어요</p>
+                  <p className="mt-2 text-xs leading-relaxed text-muted">현재 불러온 음식점 중 일치하는 후보가 없어요.<br />{radius < 1000 ? "반경을 넓히거나 다른 음식을 골라보세요." : "다른 음식을 고르거나 검색 위치를 바꿔보세요."}</p>
+                  {radius < 1000 && <button onClick={() => setRadius(RADIUS_OPTIONS.find((option) => option.value > radius)!.value)}
+                    className={`mt-3 rounded-full border border-border bg-surface px-4 py-2 text-sm font-semibold text-primary ${FOCUS}`}>반경 넓히기</button>}
+                </div>
+              ) : (
+                <>
+                  <div className="mb-2 flex items-baseline justify-between gap-2">
+                    <h3 className="text-sm font-semibold">{selectedCategory.icon} {selectedCategory.label} 후보 <span className="text-primary">{candidates.length}곳</span></h3>
+                    <span className="text-[10px] text-muted">불러온 {nearby.restaurants.length}곳 중</span>
+                  </div>
+                  <ul className="divide-y divide-border">
+                    {(showAllCandidates ? candidates : candidates.slice(0, 4)).map((restaurant) => (
+                      <li key={restaurant.placeId} className="flex items-center justify-between gap-3 py-3">
+                        <div className="min-w-0"><p className="truncate text-sm font-medium">{restaurant.name}</p><p className="mt-0.5 truncate text-xs text-muted">{restaurant.category}</p></div>
+                        <span className="shrink-0 text-xs tabular-nums text-muted">{restaurant.distance}m</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {candidates.length > 4 && <button aria-expanded={showAllCandidates} onClick={() => setShowAllCandidates(!showAllCandidates)}
+                    className={`mt-1 w-full rounded-xl bg-surface-dim py-2.5 text-xs font-medium text-muted ${FOCUS}`}>{showAllCandidates ? "후보 접기" : `${candidates.length}곳 모두 보기`}</button>}
+                  {candidates.length === 1 && <p className="mt-3 text-xs text-primary">후보가 한 곳이에요. 이 가게의 구슬로 핀볼을 즐겨보세요.</p>}
+                </>
+              )}
+            </div>
+            <p className="text-[10px] leading-relaxed text-muted">카카오맵 분류 기준이에요. 검색 결과는 주변의 모든 음식점을 포함하지 않을 수 있어요.</p>
+          </>
+        )}
+      </section>
 
-          <button
-            onClick={handleStart}
-            className="w-full max-w-xs rounded-full bg-primary px-10 py-4 text-lg font-semibold text-white shadow-md transition-all hover:bg-primary-hover hover:shadow-lg active:scale-95"
-          >
-            시작하기
-          </button>
-        </div>
-      )}
-
-      <p className="text-xs text-muted">
-        위치 정보는 음식점 검색을 위해 현재 탭에만 임시 저장돼요
-      </p>
-    </div>
+      <section aria-labelledby="play-heading" className="text-center">
+        <h2 id="play-heading" className="mb-3 text-sm font-bold"><span className="mr-2 text-primary">03</span> 마지막 선택은 핀볼로</h2>
+        <button onClick={handleStart} disabled={!readyToPlay}
+          className={`w-full rounded-2xl bg-primary px-6 py-4 text-base font-bold text-white shadow-md transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:bg-surface-dim disabled:text-muted disabled:shadow-none ${FOCUS}`}>
+          {readyToPlay ? `${selectedCategory.label} ${candidates.length}곳으로 핀볼 시작` : placesLoading ? "후보를 불러오고 있어요…" : "후보를 확인하고 핀볼 시작"}
+        </button>
+        <p className="mt-4 text-[10px] leading-relaxed text-muted">위치와 선택한 음식은 현재 탭에만 임시 저장돼요.</p>
+      </section>
+    </main>
   );
 }

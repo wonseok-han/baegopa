@@ -1,127 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Matter from "matter-js";
+import { createPinballClock } from "@/lib/pinball-clock";
 import type { GameProps, Restaurant } from "@/types";
 
-const WIDTH = 360;
-const VIEW_HEIGHT = 600;
-const WORLD_HEIGHT = 1840;
-const FINISH_Y = 1690;
-const COURSE_CATEGORY = 0x0001;
-const COLLISION_COHORTS = 12;
-
-const PALETTE = [
-  "#e85d24",
-  "#168c82",
-  "#e1a62b",
-  "#3973b9",
-  "#cc4d67",
-  "#7654a8",
-  "#5f8f3c",
-  "#d5762c",
-  "#287e9f",
-  "#a65d3f",
-];
+import {
+  createPinballRace, WIDTH, VIEW_HEIGHT, WORLD_HEIGHT, FINISH_Y, PALETTE, FIXED_STEP_MS,
+  type Marble, type PinballRace,
+} from "@/lib/pinball-race";
 
 type RacePhase = "lobby" | "countdown" | "racing" | "finished";
-
-interface TrailPoint {
-  x: number;
-  y: number;
-}
-
-interface Marble {
-  restaurant: Restaurant;
-  body: Matter.Body;
-  color: string;
-  number: number;
-  radius: number;
-  trail: TrailPoint[];
-}
-
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  color: string;
-}
-
-function shuffle<T>(items: T[]) {
-  const shuffled = [...items];
-  for (let index = shuffled.length - 1; index > 0; index--) {
-    const target = Math.floor(Math.random() * (index + 1));
-    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
-  }
-  return shuffled;
-}
-
-function getMarbleRadius(count: number) {
-  if (count <= 16) return 12;
-  if (count <= 40) return 10;
-  return 8;
-}
-
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; color: string; }
 function shortName(name: string, length = 7) {
   return name.length > length ? `${name.slice(0, length)}…` : name;
 }
-
-function addPegField(
-  world: Matter.World,
-  startY: number,
-  rows: number,
-  columns: number,
-  spacingY: number
-) {
-  for (let row = 0; row < rows; row++) {
-    const shifted = row % 2 === 1;
-    const count = shifted ? columns - 1 : columns;
-    const spacingX = (WIDTH - 34) / (columns + 1);
-    const startX = 17 + (shifted ? spacingX * 1.5 : spacingX);
-
-    for (let column = 0; column < count; column++) {
-      Matter.Composite.add(
-        world,
-        Matter.Bodies.circle(
-          startX + column * spacingX,
-          startY + row * spacingY,
-          5,
-          {
-            isStatic: true,
-            restitution: 0.78,
-            friction: 0,
-            label: "peg",
-          }
-        )
-      );
-    }
-  }
+function subscribeMotion(callback: () => void) {
+  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+  media.addEventListener("change", callback);
+  return () => media.removeEventListener("change", callback);
 }
-
-function addRamp(
-  world: Matter.World,
-  y: number,
-  side: "left" | "right",
-  gap: number,
-  angle = 0.14
-) {
-  const length = WIDTH - gap;
-  const x = side === "left" ? length / 2 : WIDTH - length / 2;
-  Matter.Composite.add(
-    world,
-    Matter.Bodies.rectangle(x, y, length, 13, {
-      isStatic: true,
-      angle: side === "left" ? angle : -angle,
-      friction: 0,
-      frictionStatic: 0,
-      restitution: 0.28,
-      chamfer: { radius: 6 },
-      label: "ramp",
-    })
-  );
-}
+function getMotionPreference() { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+function getServerMotionPreference() { return false; }
 
 function drawRoundedRect(
   context: CanvasRenderingContext2D,
@@ -136,14 +36,30 @@ function drawRoundedRect(
 }
 
 export function PinballGame({ candidates, onResult }: GameProps) {
-  const racers = useMemo(() => shuffle(candidates), [candidates]);
+  // Freeze candidates once for this mounted round. A new category remounts the game.
+  const [racers] = useState(() => [...new Map(candidates.map((item) => [item.placeId, { ...item, location: { ...item.location } }])).values()]);
+  const raceRef = useRef<PinballRace | null>(null);
+  const startedRef = useRef(false);
+  const deliveredRef = useRef(false);
+  const advancingRef = useRef(false);
+  const physicsFrameRef = useRef(0);
+  const generationRef = useRef(0);
+  const [skipping, setSkipping] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const [motionOverride, setMotionOverride] = useState<boolean | null>(null);
+  const prefersReducedMotion = useSyncExternalStore(subscribeMotion, getMotionPreference, getServerMotionPreference);
+  const reduceMotion = motionOverride ?? prefersReducedMotion;
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const skipButtonRef = useRef<HTMLButtonElement>(null);
+  const resultButtonRef = useRef<HTMLButtonElement>(null);
   const engineRef = useRef<Matter.Engine | null>(null);
-  const runnerRef = useRef<Matter.Runner | null>(null);
   const marblesRef = useRef<Marble[]>([]);
   const marbleByBodyRef = useRef(new Map<number, Marble>());
   const featuredMarblesRef = useRef(new Set<string>());
   const particlesRef = useRef<Particle[]>([]);
+  const bumperGlowRef = useRef(new Map<number, number>());
+  const leadLabelIdsRef = useRef(new Set<string>());
+  const lastBumperToneRef = useRef(0);
   const cameraYRef = useRef(0);
   const resolvedRef = useRef(false);
   const animationRef = useRef<number>(0);
@@ -159,10 +75,11 @@ export function PinballGame({ candidates, onResult }: GameProps) {
   const [progress, setProgress] = useState(0);
   const [announcement, setAnnouncement] = useState("출전 구슬 준비 완료");
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const soundRef = useRef(false);
 
   const playTone = useCallback(
     (frequency: number, duration = 0.08) => {
-      if (!soundEnabled) return;
+      if (!soundRef.current) return;
       try {
         const AudioContextClass =
           window.AudioContext ||
@@ -191,7 +108,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         // Sound is optional; gameplay continues when audio is unavailable.
       }
     },
-    [soundEnabled]
+    []
   );
 
   const stopEngine = useCallback(() => {
@@ -199,271 +116,125 @@ export function PinballGame({ candidates, onResult }: GameProps) {
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
 
-    if (runnerRef.current) {
-      Matter.Runner.stop(runnerRef.current);
-      runnerRef.current = null;
-    }
-    if (engineRef.current) {
-      Matter.Events.off(engineRef.current, "beforeUpdate");
-      Matter.Events.off(engineRef.current, "afterUpdate");
-      Matter.Events.off(engineRef.current, "collisionStart");
-      Matter.Engine.clear(engineRef.current);
-      engineRef.current = null;
-    }
+    cancelAnimationFrame(physicsFrameRef.current);
+    generationRef.current++;
+    raceRef.current?.dispose();
+    raceRef.current = null;
+    engineRef.current = null;
   }, []);
 
-  const finishRace = useCallback(
-    (marble: Marble) => {
-      if (resolvedRef.current) return;
-      resolvedRef.current = true;
+  const finishRace = useCallback((marble: Marble) => {
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
+    cancelAnimationFrame(physicsFrameRef.current);
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+    setSkipping(false);
+    setWinner(marble.restaurant);
+    setTimedOut(raceRef.current?.reason === "time-limit");
+    setLeaders([marble]);
+    setProgress(100);
+    setAnnouncement(raceRef.current?.reason === "time-limit"
+      ? `제한 시간 선두, ${marble.restaurant.name} 선택!`
+      : `${marble.restaurant.name} 도착!`);
+    setPhase("finished");
+    playTone(784, 0.22);
+  }, [playTone]);
 
-      Matter.Body.setVelocity(marble.body, { x: 0, y: 0 });
-      Matter.Body.setStatic(marble.body, true);
-      setWinner(marble.restaurant);
-      setLeaders([marble]);
-      setProgress(100);
-      setAnnouncement(`${marble.restaurant.name} 우승!`);
-      setPhase("finished");
-      playTone(784, 0.22);
-      navigator.vibrate?.([35, 40, 80]);
+  const advanceToResult = useCallback(() => {
+    if (!raceRef.current || resolvedRef.current || advancingRef.current) return;
+    advancingRef.current = true;
+    cancelAnimationFrame(physicsFrameRef.current);
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+    setPhase("racing");
+    setSkipping(true);
+    setAnnouncement("같은 핀볼의 결과를 확인하고 있어요");
+    const generation = generationRef.current;
+    const advance = () => {
+      const race = raceRef.current;
+      if (!race || generation !== generationRef.current) return;
+      // Keep skip/reduced-motion responsive even with hundreds of marbles.
+      const batchSize = Math.max(4, Math.min(90, Math.floor(3000 / race.marbles.length)));
+      const selected = race.step(batchSize);
+      if (selected) finishRace(selected);
+      else timersRef.current.push(setTimeout(advance, 0));
+    };
+    advance();
+  }, [finishRace]);
 
-      const resultTimer = setTimeout(() => onResult(marble.restaurant), 2400);
-      timersRef.current.push(resultTimer);
-    },
-    [onResult, playTone]
-  );
+  const showResult = useCallback(() => {
+    if (!winner || deliveredRef.current) return;
+    deliveredRef.current = true;
+    onResult(winner);
+  }, [winner, onResult]);
 
   const startRace = useCallback(() => {
-    if (phase !== "lobby" || !canvasRef.current) return;
-
+    if (startedRef.current || !racers.length) return;
+    startedRef.current = true;
     stopEngine();
     resolvedRef.current = false;
+    advancingRef.current = false;
     cameraYRef.current = 0;
-    leaderFrameRef.current = 0;
-    lastLeaderRef.current = "";
-    lastAnnouncementRef.current = 0;
     particlesRef.current = [];
-    setWinner(null);
-    setLeaders([]);
-    setProgress(0);
-    setCountdown("3");
-    setAnnouncement("잠시 후 출발합니다");
+    bumperGlowRef.current.clear();
+    leadLabelIdsRef.current.clear();
+    lastBumperToneRef.current = 0;
+    const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+    const race = createPinballRace(racers, seed);
+    raceRef.current = race;
+    engineRef.current = race.engine;
+    marblesRef.current = race.marbles;
+    marbleByBodyRef.current = new Map(race.marbles.map((marble) => [marble.body.id, marble]));
     setPhase("countdown");
-    playTone(440);
+    setCountdown("3");
+    setAnnouncement(`${racers.length}곳 확정 · 출발 준비`);
+    if (reduceMotion) { advanceToResult(); return; }
 
-    const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1, scale: 0.00032 },
-      positionIterations: 12,
-      velocityIterations: 10,
-    });
-    engineRef.current = engine;
-
-    const world = engine.world;
-    const marbleRadius = getMarbleRadius(racers.length);
-    const columnSpacing = marbleRadius * 2 + 1;
-    const rowSpacing =
-      racers.length > 100 ? marbleRadius * 0.65 : columnSpacing;
-    const spawnColumns = Math.max(
-      5,
-      Math.floor((WIDTH - 48) / columnSpacing)
-    );
-    const spawnRows = Math.ceil(racers.length / spawnColumns);
-    const gateY = Math.min(
-      190,
-      38 + spawnRows * rowSpacing + marbleRadius + 8
-    );
-
-    Matter.Composite.add(world, [
-      Matter.Bodies.rectangle(2, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
-        isStatic: true,
-        label: "wall",
-      }),
-      Matter.Bodies.rectangle(WIDTH - 2, WORLD_HEIGHT / 2, 20, WORLD_HEIGHT, {
-        isStatic: true,
-        label: "wall",
-      }),
-      Matter.Bodies.rectangle(WIDTH / 2, FINISH_Y + 82, WIDTH, 18, {
-        isStatic: true,
-        label: "floor",
-      }),
-      Matter.Bodies.rectangle(WIDTH / 2, FINISH_Y, WIDTH - 36, 6, {
-        isStatic: true,
-        isSensor: true,
-        label: "finish",
-      }),
-    ]);
-
-    const gate = Matter.Bodies.rectangle(WIDTH / 2, gateY, WIDTH - 12, 12, {
-      isStatic: true,
-      friction: 0,
-      chamfer: { radius: 6 },
-      label: "gate",
-    });
-    Matter.Composite.add(world, gate);
-
-    addPegField(world, 225, 7, 7, 61);
-
-    const bumpers = [
-      { x: 92, y: 690, radius: 29 },
-      { x: 268, y: 690, radius: 29 },
-      { x: 180, y: 790, radius: 37 },
-    ];
-    bumpers.forEach(({ x, y, radius }) => {
-      Matter.Composite.add(
-        world,
-        Matter.Bodies.circle(x, y, radius, {
-          isStatic: true,
-          restitution: 1.04,
-          friction: 0,
-          label: "bumper",
-        })
-      );
-    });
-
-    const spinners: { body: Matter.Body; speed: number }[] = [];
-    [
-      { x: 103, y: 935, speed: 0.032 },
-      { x: 257, y: 935, speed: -0.032 },
-      { x: 180, y: 1045, speed: 0.038 },
-    ].forEach(({ x, y, speed }) => {
-      const body = Matter.Bodies.rectangle(x, y, 104, 9, {
-        isStatic: true,
-        restitution: 0.58,
-        chamfer: { radius: 4 },
-        label: "spinner",
-      });
-      spinners.push({ body, speed });
-      Matter.Composite.add(world, body);
-    });
-
-    addRamp(world, 1165, "left", 72, 0.16);
-    addRamp(world, 1280, "right", 72, 0.16);
-    addPegField(world, 1395, 3, 6, 59);
-
-    Matter.Composite.add(world, [
-      Matter.Bodies.rectangle(76, 1590, 168, 14, {
-        isStatic: true,
-        angle: 0.3,
-        friction: 0,
-        chamfer: { radius: 7 },
-        label: "funnel",
-      }),
-      Matter.Bodies.rectangle(WIDTH - 76, 1590, 168, 14, {
-        isStatic: true,
-        angle: -0.3,
-        friction: 0,
-        chamfer: { radius: 7 },
-        label: "funnel",
-      }),
-    ]);
-
-    const marbles = racers.map((restaurant, index) => {
-      const column = index % spawnColumns;
-      const row = Math.floor(index / spawnColumns);
-      const columnWidth =
-        spawnColumns === 1 ? 0 : (WIDTH - 48) / (spawnColumns - 1);
-      const x = 24 + column * columnWidth + (Math.random() - 0.5) * 1.5;
-      const y = 38 + row * rowSpacing;
-      const cohortCategory = 1 << ((index % COLLISION_COHORTS) + 1);
-      const body = Matter.Bodies.circle(x, y, marbleRadius, {
-        restitution: 0.66,
-        friction: 0,
-        frictionStatic: 0,
-        frictionAir: 0.004,
-        density: 0.0012,
-        collisionFilter: {
-          category: cohortCategory,
-          mask: COURSE_CATEGORY | cohortCategory,
-        },
-        label: `marble:${restaurant.placeId}`,
-      });
-      Matter.Composite.add(world, body);
-      return {
-        restaurant,
-        body,
-        color: PALETTE[index % PALETTE.length],
-        number: index + 1,
-        radius: marbleRadius,
-        trail: [],
-      };
-    });
-    marblesRef.current = marbles;
-    marbleByBodyRef.current = new Map(
-      marbles.map((marble) => [marble.body.id, marble])
-    );
-    Matter.Events.on(engine, "beforeUpdate", () => {
-      spinners.forEach(({ body, speed }) => Matter.Body.rotate(body, speed));
-    });
-
-    Matter.Events.on(engine, "collisionStart", (event) => {
+    Matter.Events.on(race.engine, "collisionStart", (event) => {
+      if (advancingRef.current || resolvedRef.current) return;
       for (const pair of event.pairs) {
-        const marbleA = marbleByBodyRef.current.get(pair.bodyA.id);
-        const marbleB = marbleByBodyRef.current.get(pair.bodyB.id);
-        const marble = marbleA ?? marbleB;
+        const marble = marbleByBodyRef.current.get(pair.bodyA.id) ?? marbleByBodyRef.current.get(pair.bodyB.id);
         if (!marble) continue;
-
-        const obstacle = marbleA ? pair.bodyB : pair.bodyA;
-        if (obstacle.label === "finish") {
-          finishRace(marble);
-          break;
+        const obstacle = pair.bodyA === marble.body ? pair.bodyB : pair.bodyA;
+        const impactSpeed = Math.hypot(marble.body.velocity.x, marble.body.velocity.y);
+        if (obstacle.label === "bumper") {
+          bumperGlowRef.current.set(obstacle.id, 1);
+          const now = performance.now();
+          if (now - lastBumperToneRef.current > 100) {
+            lastBumperToneRef.current = now;
+            playTone(280 + Math.min(impactSpeed, 8) * 45, 0.045);
+          }
         }
-
-        const speed = Math.hypot(
-          marble.body.velocity.x,
-          marble.body.velocity.y
-        );
-
-        if (speed < 2.2 || particlesRef.current.length > 90) continue;
-
-        for (let index = 0; index < 5; index++) {
-          particlesRef.current.push({
-            x: marble.body.position.x,
-            y: marble.body.position.y,
-            vx: (Math.random() - 0.5) * 3.6,
-            vy: (Math.random() - 0.5) * 3.6,
-            life: 1,
-            color: marble.color,
-          });
-        }
+        if (impactSpeed < 1.4 || particlesRef.current.length > 90) continue;
+        for (let index = 0; index < 4; index++) particlesRef.current.push({
+          x: marble.body.position.x, y: marble.body.position.y,
+          vx: (Math.random() - 0.5) * 3.6, vy: (Math.random() - 0.5) * 3.6, life: 1, color: marble.color,
+        });
       }
     });
-
-    const countdownTwo = setTimeout(() => {
-      setCountdown("2");
-      playTone(494);
-    }, 450);
-    const countdownOne = setTimeout(() => {
-      setCountdown("1");
-      playTone(554);
-    }, 900);
-    const countdownGo = setTimeout(() => {
-      setCountdown("GO!");
-      setAnnouncement("게이트 오픈!");
-      playTone(659, 0.14);
-      navigator.vibrate?.(30);
-      Matter.Composite.remove(world, gate);
-    }, 1350);
-    const raceStart = setTimeout(() => setPhase("racing"), 1600);
+    const generation = generationRef.current;
+    const run = () => {
+      if (generation !== generationRef.current || advancingRef.current) return;
+      setPhase("racing");
+      setAnnouncement("먼저 도착하는 음식점으로!");
+      const clock = createPinballClock(FIXED_STEP_MS);
+      clock.reset(performance.now());
+      const frame = (now: number) => {
+        if (generation !== generationRef.current || advancingRef.current || resolvedRef.current) return;
+        // One second on screen is one second of physics. Skip uses the same steps.
+        clock.advance(now, () => Boolean(race.step()));
+        if (race.winner) finishRace(race.winner);
+        else physicsFrameRef.current = requestAnimationFrame(frame);
+      };
+      physicsFrameRef.current = requestAnimationFrame(frame);
+    };
     timersRef.current.push(
-      countdownTwo,
-      countdownOne,
-      countdownGo,
-      raceStart
+      setTimeout(() => { setCountdown("2"); playTone(494); }, 350),
+      setTimeout(() => { setCountdown("1"); playTone(554); }, 700),
+      setTimeout(run, 1050),
     );
-
-    const timeoutTimer = setTimeout(() => {
-      if (resolvedRef.current) return;
-      const leader = marbles.reduce((current, marble) =>
-        marble.body.position.y > current.body.position.y ? marble : current
-      );
-      finishRace(leader);
-    }, 30000);
-    timersRef.current.push(timeoutTimer);
-
-    const runner = Matter.Runner.create();
-    runnerRef.current = runner;
-    Matter.Runner.run(runner, engine);
-  }, [finishRace, phase, playTone, racers, stopEngine]);
+  }, [advanceToResult, finishRace, playTone, racers, reduceMotion, stopEngine]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -523,17 +294,15 @@ export function PinballGame({ candidates, onResult }: GameProps) {
 
       const engine = engineRef.current;
       const marbles = marblesRef.current;
-      if (!engine || phase === "lobby") {
-        animationRef.current = requestAnimationFrame(render);
-        return;
-      }
+      if (!engine || phase === "lobby" || reduceMotion || skipping) return;
 
       let leadY = 0;
       for (const marble of marbles) {
         leadY = Math.max(leadY, marble.body.position.y);
       }
+      const winnerY = marbles.find((marble) => marble.restaurant.placeId === winner?.placeId)?.body.position.y ?? FINISH_Y;
       const targetCamera = resolvedRef.current
-        ? FINISH_Y - VIEW_HEIGHT * 0.7
+        ? Math.max(0, Math.min(winnerY - VIEW_HEIGHT * 0.45, WORLD_HEIGHT - VIEW_HEIGHT))
         : Math.max(
             0,
             Math.min(
@@ -541,7 +310,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
               WORLD_HEIGHT - VIEW_HEIGHT
             )
           );
-      cameraYRef.current += (targetCamera - cameraYRef.current) * 0.052;
+      cameraYRef.current = resolvedRef.current
+        ? targetCamera
+        : cameraYRef.current + (targetCamera - cameraYRef.current) * 0.052;
       const cameraY = cameraYRef.current;
 
       if (!resolvedRef.current && phase === "racing") {
@@ -555,6 +326,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
               .slice(0, 12)
               .map((marble) => marble.restaurant.placeId)
           );
+          leadLabelIdsRef.current = new Set(sorted.slice(0, 3).map((marble) => marble.restaurant.placeId));
           setLeaders(sorted.slice(0, 3));
           setProgress(Math.min(99, Math.round((leadY / FINISH_Y) * 100)));
 
@@ -613,6 +385,15 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         }
 
         if (body.label === "bumper") {
+          const glow = bumperGlowRef.current.get(body.id) ?? 0;
+          if (glow > 0.02) {
+            context.beginPath();
+            context.arc(body.position.x, screenY, (body.circleRadius ?? 30) + 5 + (1 - glow) * 12, 0, Math.PI * 2);
+            context.strokeStyle = `rgba(232,93,36,${glow * 0.65})`;
+            context.lineWidth = 3 * glow;
+            context.stroke();
+            bumperGlowRef.current.set(body.id, glow * 0.88);
+          } else bumperGlowRef.current.delete(body.id);
           context.shadowColor = "rgba(169, 68, 27, 0.25)";
           context.shadowBlur = 12;
           context.shadowOffsetY = 4;
@@ -653,6 +434,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         if (body.label === "spinner") {
           context.fillStyle = "#168c82";
           context.strokeStyle = "#0e514d";
+        } else if (body.label === "deflector") {
+          context.fillStyle = "#edb449";
+          context.strokeStyle = "#966223";
         } else if (body.label === "gate") {
           context.fillStyle = "#e2ae4e";
           context.strokeStyle = "#7f5426";
@@ -668,6 +452,22 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         context.stroke();
         context.shadowBlur = 0;
         context.shadowOffsetY = 0;
+        if (body.label === "deflector") {
+          context.save();
+          context.translate(body.position.x, screenY);
+          context.rotate(body.angle);
+          context.strokeStyle = "rgba(112,68,26,0.5)";
+          context.lineWidth = 2;
+          const direction = body.angle > 0 ? 1 : -1;
+          for (const offset of [-22, 0, 22]) {
+            context.beginPath();
+            context.moveTo(offset - direction * 4, -4);
+            context.lineTo(offset + direction * 2, 0);
+            context.lineTo(offset - direction * 4, 4);
+            context.stroke();
+          }
+          context.restore();
+        }
       }
 
       const finishScreenY = FINISH_Y - cameraY;
@@ -770,6 +570,21 @@ export function PinballGame({ candidates, onResult }: GameProps) {
           context.textBaseline = "alphabetic";
         }
 
+        if (leadLabelIdsRef.current.has(marble.restaurant.placeId) && !isWinner) {
+          const labelX = Math.max(52, Math.min(WIDTH - 52, x));
+          const labelY = y - marble.radius - 22;
+          context.fillStyle = "rgba(255,250,240,0.94)";
+          context.strokeStyle = marble.color;
+          context.lineWidth = 1.25;
+          drawRoundedRect(context, labelX - 44, labelY, 88, 18, 6);
+          context.fill();
+          context.stroke();
+          context.fillStyle = "#4d2f20";
+          context.font = "800 10px sans-serif";
+          context.textAlign = "center";
+          context.fillText(shortName(marble.restaurant.name, 7), labelX, labelY + 12);
+        }
+
         if (isWinner) {
           context.strokeStyle = "#e2ae4e";
           context.lineWidth = 2.5;
@@ -818,14 +633,22 @@ export function PinballGame({ candidates, onResult }: GameProps) {
       );
       context.fill();
 
-      animationRef.current = requestAnimationFrame(render);
+      if (phase !== "finished") animationRef.current = requestAnimationFrame(render);
     };
 
     render();
     return () => cancelAnimationFrame(animationRef.current);
-  }, [phase, winner]);
+  }, [phase, winner, reduceMotion, skipping]);
 
   useEffect(() => stopEngine, [stopEngine]);
+
+  useEffect(() => {
+    // Restore the action focus only when the previous action was removed.
+    // Leave focus alone when the user moved to sound, back, or another control.
+    if (document.activeElement !== document.body) return;
+    if (phase === "finished") resultButtonRef.current?.focus({ preventScroll: true });
+    else if (phase === "countdown" || phase === "racing") skipButtonRef.current?.focus({ preventScroll: true });
+  }, [phase]);
 
   return (
     <div className="w-full max-w-[410px]">
@@ -838,16 +661,17 @@ export function PinballGame({ candidates, onResult }: GameProps) {
               </div>
               <div>
                 <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#a65d3f]">
-                  Baegopa Marble Club
+                  Baegopa Pinball Club
                 </p>
                 <p className="text-xs font-extrabold text-[#4d2f20]">
-                  오늘의 푸드 레이스
+                  오늘의 한 끼 핀볼
                 </p>
               </div>
             </div>
             <button
               type="button"
-              onClick={() => setSoundEnabled((enabled) => !enabled)}
+              onClick={() => { soundRef.current = !soundRef.current; setSoundEnabled(soundRef.current); }}
+              aria-pressed={soundEnabled}
               aria-label={soundEnabled ? "사운드 끄기" : "사운드 켜기"}
               className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d9c5a7] bg-white/70 text-[#6b4631] transition-colors hover:bg-white"
             >
@@ -878,7 +702,7 @@ export function PinballGame({ candidates, onResult }: GameProps) {
               ref={canvasRef}
               className="h-full w-full"
               role="img"
-              aria-label="음식점 구슬들이 프리미엄 아케이드 코스를 달리는 마블 레이스"
+              aria-label="음식점 구슬들의 핀볼 코스. 결과는 아래 텍스트로도 안내합니다."
             />
 
             {phase !== "lobby" && (
@@ -898,15 +722,15 @@ export function PinballGame({ candidates, onResult }: GameProps) {
               <div className="absolute inset-0 flex flex-col bg-[linear-gradient(180deg,rgba(255,248,235,0.72),rgba(247,237,220,0.97))] px-5 pb-5 pt-6 backdrop-blur-[1.5px]">
                 <div className="text-center">
                   <span className="inline-flex rounded-full border border-[#d9c5a7] bg-white/65 px-3 py-1 text-[9px] font-black uppercase tracking-[0.18em] text-[#a65d3f]">
-                    {racers.length} Restaurants · All In
+                    {racers.length}곳 · 준비 완료
                   </span>
                   <h2 className="mt-3 text-2xl font-black tracking-tight text-[#4d2f20]">
-                    조회된 음식점 전원 출전!
+                    오늘은 어디서 먹을까?
                   </h2>
                   <p className="mt-1 text-xs leading-5 text-[#896b55]">
-                    주변 {candidates.length}곳이 하나도 빠짐없이
+                    확인한 후보 {racers.length}곳이
                     <br />
-                    구슬이 되어 아케이드 코스를 달려요.
+                    핀볼 코스를 달려 오늘의 한 끼를 골라요.
                   </p>
                 </div>
 
@@ -937,9 +761,10 @@ export function PinballGame({ candidates, onResult }: GameProps) {
                 <button
                   type="button"
                   onClick={startRace}
+                  disabled={!racers.length}
                   className="mt-auto w-full rounded-2xl border-b-4 border-[#a33e18] bg-[#e85d24] px-6 py-3.5 text-base font-black text-white shadow-[0_10px_24px_rgba(232,93,36,0.24)] transition-all hover:bg-[#d94f1b] active:translate-y-0.5 active:border-b-2"
                 >
-                  {racers.length}개 구슬 레이스 시작
+                  {racers.length === 1 ? "이 음식점으로 핀볼 시작" : "핀볼로 골라줘!"}
                 </button>
               </div>
             )}
@@ -991,8 +816,9 @@ export function PinballGame({ candidates, onResult }: GameProps) {
                     {winner.name}
                   </p>
                   <p className="mt-1 text-xs text-[#8a6a54]">
-                    우승 기록을 확인하러 이동할게요
+                    {timedOut ? "제한 시간에 가장 앞선 음식점이에요" : "오늘의 한 끼, 여기 어때요?"}
                   </p>
+                  <button ref={resultButtonRef} type="button" onClick={showResult} className="mt-4 w-full rounded-xl bg-[#e85d24] px-4 py-3 text-sm font-extrabold text-white">음식점 정보 보기</button>
                 </div>
               </div>
             )}
@@ -1000,13 +826,21 @@ export function PinballGame({ candidates, onResult }: GameProps) {
         </div>
       </div>
 
-      <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#9a765f]">
-        <span>Equal odds</span>
-        <span className="h-1 w-1 rounded-full bg-[#c7a98d]" />
-        <span>Physics race</span>
-        <span className="h-1 w-1 rounded-full bg-[#c7a98d]" />
-        <span>All {racers.length} marbles</span>
-      </div>
+      <p role="status" aria-live="polite" aria-atomic="true" className="mt-4 text-center text-sm font-bold text-[#6d4933] dark:text-[#d7bda5]">
+        {phase === "finished" ? announcement : skipping ? "움직임 없이 같은 결과를 계산하고 있어요…" : phase === "lobby" ? `${racers.length}곳이 준비됐어요` : "핀볼 진행 중 · 후보는 바뀌지 않아요"}
+      </p>
+      {phase === "lobby" && <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 text-xs text-[#6d4933] dark:text-[#d7bda5]">
+        <input type="checkbox" checked={reduceMotion} onChange={(event) => setMotionOverride(event.target.checked)} className="h-4 w-4 accent-[#e85d24]" />
+        움직임 없이 결과 보기
+      </label>}
+      {(phase === "countdown" || phase === "racing") && <button ref={skipButtonRef} type="button" onClick={advanceToResult} disabled={skipping} className="mt-3 w-full rounded-xl border border-[#c7a98d] px-4 py-3 text-sm font-bold text-[#6d4933] disabled:opacity-50 dark:text-[#d7bda5]">
+        {skipping ? "결과 확인 중…" : "연출 건너뛰고 결과 보기"}
+      </button>}
+      <p className="mt-3 text-center text-[11px] leading-5 text-[#896b55] dark:text-[#bfa38b]">
+        출발 순서를 무작위로 섞고 먼저 도착한 음식점을 선택해요.
+        <br />제한 시간에는 선두를 선택하며, 건너뛰어도 같은 핀볼 결과예요.
+      </p>
+
     </div>
   );
 }
